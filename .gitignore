@@ -1,0 +1,39 @@
+# --- Keil MDK / ARM Build Output ---
+# 忽略编译生成的列表文件和对象文件文件夹
+Listings/
+Objects/
+RTE/
+
+# 忽略编译产生的各种中间文件
+*.o
+*.d
+*.crf
+*.ci
+*.axf
+*.hex
+*.htm
+*.map
+*.dep
+*.lnp
+*.bak
+*.lst
+*.sct
+*.iex
+
+# --- Keil Project Local Settings ---
+# 保留 .uvprojx (项目工程文件)，但忽略用户特定的调试配置
+*.uvoptx
+*.uvguix.*
+*.scvd
+
+# --- J-Link / Debugger ---
+JLinkLog.txt
+*.jlink
+
+# --- VS Code Local Settings ---
+# 通常建议忽略 .vscode 文件夹，因为它包含你本地的路径配置
+.vscode/
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
