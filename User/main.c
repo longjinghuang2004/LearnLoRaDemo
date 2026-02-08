@@ -19,8 +19,8 @@ int main(void)
 
     // --- 进入 LoRa 驱动测试模式 ---
     // 验证通过后，注释掉这行，恢复下方的主逻辑
-    LoRa_Test_Run(); 
-
+    //LoRa_Test_Run(); 
+		LoRa_Dual_Test_Run();
     /* 
     // 原有主逻辑 (暂时屏蔽)
     Model_Init();
