@@ -339,7 +339,7 @@
               <MiscControls>--no-multibyte-chars</MiscControls>
               <Define>USE_STDPERIPH_DRIVER</Define>
               <Undefine></Undefine>
-              <IncludePath>.\Start;.\Library;.\User;.\System;.\Hardware;.\function;.\Model</IncludePath>
+              <IncludePath>.\Start;.\Library;.\User;.\System;.\Hardware;.\function;.\Model;.\LoRa_Plat;.\LoRa_Plat\Layer1_Test;.\LoRa_Plat\Layer2_Module;.\LoRa_Plat\Layer3_Driver</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -817,6 +817,36 @@
               <FileName>Indicator.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\Model\Indicator.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>LoRa_Plat</GroupName>
+          <Files>
+            <File>
+              <FileName>lora_test_task.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\Layer1_Test\lora_test_task.c</FilePath>
+            </File>
+            <File>
+              <FileName>mod_lora.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\Layer2_Module\mod_lora.c</FilePath>
+            </File>
+            <File>
+              <FileName>mod_lora.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\Layer2_Module\mod_lora.h</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_uart3_dma.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\Layer3_Driver\bsp_uart3_dma.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_uart3_dma.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\Layer3_Driver\bsp_uart3_dma.h</FilePath>
             </File>
           </Files>
         </Group>
