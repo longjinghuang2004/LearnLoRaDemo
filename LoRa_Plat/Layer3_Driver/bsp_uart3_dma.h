@@ -49,4 +49,7 @@ void BSP_UART3_SendString(char *str);
  */
 void BSP_UART3_ResetRx(void);
 
+// [新增] 彻底清空缓冲区内容，用于AT指令解析前
+void BSP_UART3_ClearRxBuffer(void);
+
 #endif // __BSP_UART3_DMA_H
