@@ -1,5 +1,5 @@
 #include "stm32f10x.h"
-#include "bsp_uart3_dma.h"
+#include "bsp_lora_uart.h"
 #include "mod_lora.h"
 #include "LED.h"
 #include "Delay.h"

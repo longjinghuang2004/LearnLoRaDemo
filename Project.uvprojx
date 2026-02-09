@@ -824,11 +824,6 @@
           <GroupName>LoRa_Plat</GroupName>
           <Files>
             <File>
-              <FileName>lora_test_task.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\LoRa_Plat\Layer1_Test\lora_test_task.c</FilePath>
-            </File>
-            <File>
               <FileName>mod_lora.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\LoRa_Plat\Layer2_Module\mod_lora.c</FilePath>
@@ -839,19 +834,29 @@
               <FilePath>.\LoRa_Plat\Layer2_Module\mod_lora.h</FilePath>
             </File>
             <File>
-              <FileName>bsp_uart3_dma.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\LoRa_Plat\Layer3_Driver\bsp_uart3_dma.c</FilePath>
-            </File>
-            <File>
-              <FileName>bsp_uart3_dma.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\LoRa_Plat\Layer3_Driver\bsp_uart3_dma.h</FilePath>
-            </File>
-            <File>
               <FileName>lora_protocol.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\LoRa_Plat\Layer1_Test\lora_protocol.h</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_lora_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\Layer3_Driver\bsp_lora_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_lora_uart.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\Layer3_Driver\bsp_lora_uart.h</FilePath>
+            </File>
+            <File>
+              <FileName>lora_echo_test.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\Layer1_Test\lora_echo_test.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_echo_test.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\Layer1_Test\lora_echo_test.h</FilePath>
             </File>
           </Files>
         </Group>

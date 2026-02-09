@@ -1,196 +1,316 @@
+/**
+  ******************************************************************************
+  * @file    mod_lora.c
+  * @author  None
+  * @brief   Layer 2: LoRa 中间件实现
+  ******************************************************************************
+  */
+
 #include "mod_lora.h"
-#include "bsp_uart3_dma.h"
-#include "Delay.h"
-#include "Serial.h" 
-#include <stdio.h>
 #include <string.h>
 
-// --- 引脚定义 ---
-#define LORA_MD0_PIN    GPIO_Pin_4
-#define LORA_MD0_PORT   GPIOA
-#define LORA_AUX_PIN    GPIO_Pin_5
-#define LORA_AUX_PORT   GPIOA
+/* ========================================================================== */
+/*                                 内部辅助函数                                */
+/* ========================================================================== */
 
-static void LoRa_GPIO_Init(void)
+// 等待 AUX 引脚变低 (空闲)
+static void _LoRa_WaitAux(LoRa_Dev_t *dev)
 {
-    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
-    GPIO_InitTypeDef GPIO_InitStructure;
-    GPIO_InitStructure.GPIO_Pin = LORA_MD0_PIN;
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-    GPIO_Init(LORA_MD0_PORT, &GPIO_InitStructure);
-
-    GPIO_InitStructure.GPIO_Pin = LORA_AUX_PIN;
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
-    GPIO_Init(LORA_AUX_PORT, &GPIO_InitStructure);
-}
-
-static void LoRa_WaitAux(void)
-{
-    while (GPIO_ReadInputDataBit(LORA_AUX_PORT, LORA_AUX_PIN) == 1)
+    if (dev->drv.ReadAUX && dev->drv.DelayMs)
     {
-        Delay_ms(10);
+        // 简单的超时保护，防止死锁
+        uint32_t timeout = 1000; 
+        while (dev->drv.ReadAUX() == 1 && timeout > 0)
+        {
+            dev->drv.DelayMs(2); // 稍微延时
+            timeout--;
+        }
     }
 }
 
-void LoRa_Init(void)
-{
-    LoRa_GPIO_Init();
-}
+/* ========================================================================== */
+/*                                 接口实现                                   */
+/* ========================================================================== */
 
-void LoRa_SetMode_Config(void)
+/**
+  * @brief  1. 初始化 LoRa 中间件
+  */
+bool LoRa_Init(LoRa_Dev_t *dev, const LoRa_Driver_t *driver)
 {
-    GPIO_SetBits(LORA_MD0_PORT, LORA_MD0_PIN);
-    Delay_ms(50); 
-    LoRa_WaitAux();
-}
-
-void LoRa_SetMode_Trans(void)
-{
-    GPIO_ResetBits(LORA_MD0_PORT, LORA_MD0_PIN);
-    Delay_ms(50);
-    LoRa_WaitAux();
+    if (dev == NULL || driver == NULL) return false;
+    
+    // 1. 绑定驱动接口
+    dev->drv = *driver;
+    
+    // 2. 初始化内部状态
+    memset(dev->rx_buf, 0, LORA_INTERNAL_RX_BUF_SIZE);
+    dev->rx_index = 0;
+    dev->is_receiving_packet = false;
+    
+    // 3. 设置默认包头包尾
+    dev->head[0] = LORA_DEFAULT_HEAD_0;
+    dev->head[1] = LORA_DEFAULT_HEAD_1;
+    dev->tail[0] = LORA_DEFAULT_TAIL_0;
+    dev->tail[1] = LORA_DEFAULT_TAIL_1;
+    
+    // 4. 硬件复位流程 (可选，依赖 SetMD0)
+    if (dev->drv.SetMD0)
+    {
+        dev->drv.SetMD0(0); // 默认为通信模式
+        if (dev->drv.DelayMs) dev->drv.DelayMs(100);
+    }
+    
+    return true;
 }
 
 /**
- * @brief  [重写] 发送AT指令并等待响应 (适配 DMA 循环模式)
- * @param  cmd: AT指令
- * @param  expect: 期望的响应子串
- * @param  timeout_ms: 超时时间
- */
-static bool LoRa_SendCmd_WaitResp(char* cmd, char* expect, uint32_t timeout_ms)
+  * @brief  2. 发送 AT 指令并等待响应
+  */
+bool LoRa_SendAT(LoRa_Dev_t *dev, const char *cmd, char *resp_buf, uint16_t resp_max_len, const char *expect_str, uint32_t timeout_ms)
 {
-    // 定义一个局部的大缓冲区，用于拼接多次DMA接收的数据
-    char rx_accumulator[512] = {0}; 
-    uint16_t acc_len = 0;
-    uint8_t temp_buf[64]; // 临时读取缓冲区
-
-    // 1. 清空底层DMA缓冲区 (重置读指针)
-    BSP_UART3_ClearRxBuffer();
+    if (dev == NULL || cmd == NULL) return false;
     
-    // 2. 发送指令
-    BSP_UART3_SendString(cmd);
-    
-    // 3. 循环等待
-    uint32_t start_time = GetTick();
-    while (GetTick() - start_time < timeout_ms)
+    // 1. 进入配置模式 (MD0 = 1)
+    if (dev->drv.SetMD0)
     {
-        // A. 尝试从底层驱动读取新数据
-        uint16_t len = BSP_UART3_ReadRxBuffer(temp_buf, sizeof(temp_buf));
-        
-        if (len > 0)
+        dev->drv.SetMD0(1);
+        if (dev->drv.DelayMs) dev->drv.DelayMs(50);
+        _LoRa_WaitAux(dev);
+    }
+    
+    // 2. 清空底层接收缓冲区 (防止残留数据干扰)
+    //    注意：这里我们通过读取所有数据来清空
+    uint8_t dummy;
+    while (dev->drv.Read(&dummy, 1) > 0);
+    
+    // 3. 发送指令
+    dev->drv.Send((const uint8_t*)cmd, strlen(cmd));
+    
+    // 4. 循环接收并等待响应
+    uint32_t start_tick = dev->drv.GetTick();
+    uint16_t rx_cnt = 0;
+    bool found = false;
+    
+    // 如果用户没提供缓冲区，使用内部临时缓冲区
+    char temp_buf[128];
+    char *p_buf = (resp_buf != NULL) ? resp_buf : temp_buf;
+    uint16_t max_len = (resp_buf != NULL) ? resp_max_len : sizeof(temp_buf);
+    
+    memset(p_buf, 0, max_len);
+    
+    while ((dev->drv.GetTick() - start_tick) < timeout_ms)
+    {
+        // 尝试读取一个字节
+        if (dev->drv.Read((uint8_t*)&p_buf[rx_cnt], 1) > 0)
         {
-            // B. 将新数据追加到累加缓冲区
-            if (acc_len + len < sizeof(rx_accumulator) - 1)
+            rx_cnt++;
+            
+            // 检查是否溢出
+            if (rx_cnt >= max_len - 1)
             {
-                memcpy(rx_accumulator + acc_len, temp_buf, len);
-                acc_len += len;
-                rx_accumulator[acc_len] = '\0'; // 确保字符串结束符
+                p_buf[max_len - 1] = '\0'; // 强制结束
+                break; 
             }
             
-            // C. 检查累加缓冲区中是否包含期望的字符串
-            if (strstr(rx_accumulator, expect) != NULL)
+            // 检查是否包含期望字符串
+            if (expect_str != NULL)
             {
-                return true; // 成功找到
+                p_buf[rx_cnt] = '\0'; // 临时添加结束符以便 strstr
+                if (strstr(p_buf, expect_str) != NULL)
+                {
+                    found = true;
+                    break; // 找到了，提前退出
+                }
             }
         }
-        
-        // 稍微延时释放CPU，避免死循环过快
-        Delay_ms(5);
     }
     
-    // 超时，打印累加缓冲区的内容以便调试
-    printf("[LoRa Error] Cmd: %s Timeout! Rx: %s\r\n", cmd, rx_accumulator);
-    return false;
+    // 5. 恢复通信模式 (MD0 = 0)
+    if (dev->drv.SetMD0)
+    {
+        dev->drv.SetMD0(0);
+        if (dev->drv.DelayMs) dev->drv.DelayMs(50);
+        _LoRa_WaitAux(dev);
+    }
+    
+    // 如果不需要匹配字符串，只要没超时就算成功
+    if (expect_str == NULL) return true;
+    
+    return found;
 }
 
 /**
- * @brief  LoRa 初始化并执行自检流程
- */
-bool LoRa_Init_And_SelfCheck(uint16_t addr)
+  * @brief  3. 单字节发送 (透传)
+  */
+void LoRa_SendByteRaw(LoRa_Dev_t *dev, uint8_t byte)
 {
-    char cmd_buf[64];
-    char expect_buf[32];
-    
-    printf("\r\n[LoRa] === Start Self-Check & Config ===\r\n");
-    
-    // 1. 进入配置模式
-    LoRa_SetMode_Config();
-    BSP_UART3_Init(115200); 
-    Delay_ms(100);
-    
-    // 2. 握手测试 (Ping)
-    bool ping_ok = false;
-    for(int i=0; i<3; i++) {
-        if(LoRa_SendCmd_WaitResp("AT\r\n", "OK", 200)) {
-            ping_ok = true;
-            printf("[LoRa] Ping: OK\r\n");
-            break;
-        }
-        printf("[LoRa] Ping: Retry %d...\r\n", i+1);
-        Delay_ms(100);
+    if (dev && dev->drv.Send)
+    {
+        _LoRa_WaitAux(dev); // 发送前检查忙闲
+        dev->drv.Send(&byte, 1);
     }
-    if(!ping_ok) return false; 
+}
 
-    // 3. 关闭回显 (ATE0)
-    if(!LoRa_SendCmd_WaitResp("ATE0\r\n", "OK", 500)) return false;
-    printf("[LoRa] Echo Off: OK\r\n");
-    
-    // 4. [修改] 移除 AT+DEFAULT，避免重置导致后续参数写入失败
-    // if(!LoRa_SendCmd_WaitResp("AT+DEFAULT\r\n", "OK", 2000)) return false;
-    // printf("[LoRa] Factory Reset: OK\r\n");
-    
-    // 5. [新增] 显式开启参数保存 (AT+FLASH=1)
-    // 确保配置掉电不丢失，且立即生效
-    if(!LoRa_SendCmd_WaitResp("AT+FLASH=1\r\n", "OK", 500)) return false;
+/**
+  * @brief  4. 字符串/数据发送 (透传)
+  */
+void LoRa_SendDataRaw(LoRa_Dev_t *dev, const uint8_t *data, uint16_t len)
+{
+    if (dev && dev->drv.Send && data && len > 0)
+    {
+        _LoRa_WaitAux(dev);
+        dev->drv.Send(data, len);
+    }
+}
 
-    // 6. 配置地址
-    sprintf(cmd_buf, "AT+ADDR=%02X,%02X\r\n", (addr >> 8) & 0xFF, addr & 0xFF);
-    if(!LoRa_SendCmd_WaitResp(cmd_buf, "OK", 500)) return false;
-    
-    // 7. 配置信道和空速 (信道30, 空速2.4k - 提高抗干扰)
-    // 注意：这里我们统一改为信道30，空速2 (2.4kbps)
-    if(!LoRa_SendCmd_WaitResp("AT+WLRATE=30,2\r\n", "OK", 500)) return false;
-    
-    // 8. 配置透传模式
-    if(!LoRa_SendCmd_WaitResp("AT+TMODE=0\r\n", "OK", 500)) return false;
-    
-    // 9. 配置一般工作模式
-    if(!LoRa_SendCmd_WaitResp("AT+CWMODE=0\r\n", "OK", 500)) return false;
-    
-    // [新增] 配置发射功率为最低 (0 = 11dBm)
-    // 默认是 3 (20dBm)，近距离测试必须调低
-    if(!LoRa_SendCmd_WaitResp("AT+TPOWER=0\r\n", "OK", 500)) return false;		
-		
-		
-    // 10. 配置通信波特率 (115200)
-    if(!LoRa_SendCmd_WaitResp("AT+UART=7,0\r\n", "OK", 500)) return false;
-    printf("[LoRa] Parameters Set: OK\r\n");
-    
-    // 尝试1：大写匹配
-    sprintf(expect_buf, "+ADDR:%02X,%02X", (addr >> 8) & 0xFF, addr & 0xFF);
-    if(!LoRa_SendCmd_WaitResp("AT+ADDR?\r\n", expect_buf, 500)) {
+/**
+  * @brief  4.1 发送数据包 (自动添加包头包尾)
+  */
+void LoRa_SendPacket(LoRa_Dev_t *dev, const uint8_t *data, uint16_t len)
+{
+    if (dev && dev->drv.Send && data && len > 0)
+    {
+        _LoRa_WaitAux(dev);
         
-        // 尝试2：小写匹配 (针对 ATK-LORA-01 的某些固件)
-        sprintf(expect_buf, "+ADDR:%02x,%02x", (addr >> 8) & 0xFF, addr & 0xFF);
-        if(!LoRa_SendCmd_WaitResp("AT+ADDR?\r\n", expect_buf, 500)) {
-            printf("[LoRa] Verify Addr Failed! Expected: %s (Case Insensitive)\r\n", expect_buf);
-            return false;
+        // 1. 发送包头
+        dev->drv.Send(dev->head, 2);
+        
+        // 2. 发送数据
+        dev->drv.Send(data, len);
+        
+        // 3. 发送包尾
+        dev->drv.Send(dev->tail, 2);
+    }
+}
+
+/**
+  * @brief  5. 接收数据包 (轮询调用)
+  */
+uint16_t LoRa_ReceivePacket(LoRa_Dev_t *dev, uint8_t *out_buf, uint16_t max_len)
+{
+    if (dev == NULL || out_buf == NULL || max_len == 0) return 0;
+    
+    uint8_t byte;
+    uint16_t payload_len = 0;
+    
+    // 1. 从底层驱动尽可能多地拉取数据
+    //    注意：这里每次只处理一个字节，以便精确控制状态机
+    while (dev->drv.Read(&byte, 1) > 0)
+    {
+        // --- 状态机逻辑 ---
+        
+        // 放入内部缓冲区
+        if (dev->rx_index < LORA_INTERNAL_RX_BUF_SIZE)
+        {
+            dev->rx_buf[dev->rx_index++] = byte;
+        }
+        else
+        {
+            // 缓冲区溢出，重置 (丢弃旧数据)
+            dev->rx_index = 0;
+            dev->is_receiving_packet = false;
+            // 将当前字节作为新数据的开始尝试
+            dev->rx_buf[dev->rx_index++] = byte;
+        }
+        
+        // 检查是否正在接收包
+        if (!dev->is_receiving_packet)
+        {
+            // 检查是否匹配包头 (至少要有2个字节)
+            if (dev->rx_index >= 2)
+            {
+                uint16_t idx = dev->rx_index;
+                if (dev->rx_buf[idx-2] == dev->head[0] && 
+                    dev->rx_buf[idx-1] == dev->head[1])
+                {
+                    // 找到包头！
+                    dev->is_receiving_packet = true;
+                    
+                    // 调整缓冲区：将包头移到最前面 (其实不需要移，只需标记开始)
+                    // 为了简化逻辑，我们重置 index 为 0，
+                    // 意味着 rx_buf[0] 将是 Payload 的第一个字节
+                    dev->rx_index = 0; 
+                }
+            }
+        }
+        else
+        {
+            // 正在接收包，检查是否匹配包尾
+            // 此时 rx_buf 里存放的是 Payload
+            if (dev->rx_index >= 2)
+            {
+                uint16_t idx = dev->rx_index;
+                if (dev->rx_buf[idx-2] == dev->tail[0] && 
+                    dev->rx_buf[idx-1] == dev->tail[1])
+                {
+                    // 找到包尾！一包接收完成
+                    
+                    // 计算 Payload 长度 (当前索引 - 包尾2字节)
+                    payload_len = dev->rx_index - 2;
+                    
+                    // 保护：如果 Payload 太长超过用户缓冲区
+                    if (payload_len > max_len) payload_len = max_len;
+                    
+                    // 拷贝 Payload 到用户缓冲区
+                    memcpy(out_buf, dev->rx_buf, payload_len);
+                    
+                    // 重置状态，准备接收下一包
+                    dev->rx_index = 0;
+                    dev->is_receiving_packet = false;
+                    
+                    return payload_len; // 返回长度，退出函数
+                }
+            }
+            
+            // 额外保护：如果收到新的包头 (包头重入)，说明上一包残缺
+            // 比如收到: CM...Data...CM
+            if (dev->rx_index >= 2)
+            {
+                uint16_t idx = dev->rx_index;
+                if (dev->rx_buf[idx-2] == dev->head[0] && 
+                    dev->rx_buf[idx-1] == dev->head[1])
+                {
+                    // 丢弃之前的残缺数据，重新开始
+                    dev->rx_index = 0;
+                    // 状态依然是 true (正在接收新包)
+                }
+            }
         }
     }
     
-    // 验证波特率
-    if(!LoRa_SendCmd_WaitResp("AT+UART?\r\n", "+UART:7,0", 500)) {
-        printf("[LoRa] Verify UART Failed!\r\n");
-        return false;
+    return 0; // 本次轮询未收到完整包
+}
+
+/**
+  * @brief  6. 设置包头
+  */
+void LoRa_SetPacketHeader(LoRa_Dev_t *dev, uint8_t h0, uint8_t h1)
+{
+    if (dev)
+    {
+        dev->head[0] = h0;
+        dev->head[1] = h1;
     }
-    printf("[LoRa] Verification: OK\r\n");
-    
-    // 12. 切换回通信模式
-    LoRa_SetMode_Trans();
-    BSP_UART3_Init(115200); 
-    BSP_UART3_ClearRxBuffer();
-    
-    printf("[LoRa] === Ready (Trans Mode 115200) ===\r\n\r\n");
-    return true;
+}
+
+/**
+  * @brief  7. 设置包尾
+  */
+void LoRa_SetPacketTail(LoRa_Dev_t *dev, uint8_t t0, uint8_t t1)
+{
+    if (dev)
+    {
+        dev->tail[0] = t0;
+        dev->tail[1] = t1;
+    }
+}
+
+/**
+  * @brief  辅助: 驱动 LoRa 状态机
+  */
+void LoRa_Process(LoRa_Dev_t *dev)
+{
+    // 目前版本不需要后台任务，所有逻辑都在 ReceivePacket 和 Send 中处理
+    // 预留此接口方便未来扩展 (如处理 ACK 重传)
+    (void)dev;
 }
