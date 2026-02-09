@@ -53,7 +53,7 @@ void LoRa_SetMode_Trans(void)
 }
 
 /**
- * @brief  [重写] 发送AT指令并等待响应 (支持分包拼接)
+ * @brief  [重写] 发送AT指令并等待响应 (适配 DMA 循环模式)
  * @param  cmd: AT指令
  * @param  expect: 期望的响应子串
  * @param  timeout_ms: 超时时间
@@ -63,8 +63,9 @@ static bool LoRa_SendCmd_WaitResp(char* cmd, char* expect, uint32_t timeout_ms)
     // 定义一个局部的大缓冲区，用于拼接多次DMA接收的数据
     char rx_accumulator[512] = {0}; 
     uint16_t acc_len = 0;
+    uint8_t temp_buf[64]; // 临时读取缓冲区
 
-    // 1. 清空底层DMA缓冲区
+    // 1. 清空底层DMA缓冲区 (重置读指针)
     BSP_UART3_ClearRxBuffer();
     
     // 2. 发送指令
@@ -74,20 +75,18 @@ static bool LoRa_SendCmd_WaitResp(char* cmd, char* expect, uint32_t timeout_ms)
     uint32_t start_time = GetTick();
     while (GetTick() - start_time < timeout_ms)
     {
-        // 检查底层是否收到了数据 (可能是完整包，也可能是碎片)
-        if (UART3_RxFlag)
+        // A. 尝试从底层驱动读取新数据
+        uint16_t len = BSP_UART3_ReadRxBuffer(temp_buf, sizeof(temp_buf));
+        
+        if (len > 0)
         {
-            // A. 将底层收到的数据追加到我们的累加缓冲区中
-            if (acc_len + UART3_RxLength < sizeof(rx_accumulator) - 1)
+            // B. 将新数据追加到累加缓冲区
+            if (acc_len + len < sizeof(rx_accumulator) - 1)
             {
-                memcpy(rx_accumulator + acc_len, UART3_RxBuffer, UART3_RxLength);
-                acc_len += UART3_RxLength;
+                memcpy(rx_accumulator + acc_len, temp_buf, len);
+                acc_len += len;
                 rx_accumulator[acc_len] = '\0'; // 确保字符串结束符
             }
-            
-            // B. [关键] 立即重置底层DMA，以便接收剩余的数据碎片
-            // 如果不重置，DMA处于关闭状态，后续数据会丢失
-            BSP_UART3_ResetRx();
             
             // C. 检查累加缓冲区中是否包含期望的字符串
             if (strstr(rx_accumulator, expect) != NULL)
@@ -95,6 +94,9 @@ static bool LoRa_SendCmd_WaitResp(char* cmd, char* expect, uint32_t timeout_ms)
                 return true; // 成功找到
             }
         }
+        
+        // 稍微延时释放CPU，避免死循环过快
+        Delay_ms(5);
     }
     
     // 超时，打印累加缓冲区的内容以便调试

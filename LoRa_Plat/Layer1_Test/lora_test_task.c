@@ -15,30 +15,22 @@
 // ==========================================
 
 #if (CURRENT_ROLE == 1)
-    #define TARGET_ADDR     0x0001 // 发送端保持原地址
+    #define TARGET_ADDR     0x0001 
 #else
-    #define TARGET_ADDR     0xFFFF // 接收端改为广播监听地址
+    #define TARGET_ADDR     0xFFFF 
 #endif
-
 
 #if (CURRENT_ROLE == 2)
-#define APP_RX_BUF_SIZE 256
+#define APP_RX_BUF_SIZE 512 
 uint8_t g_app_rx_buffer[APP_RX_BUF_SIZE];
 uint16_t g_app_rx_len = 0;
-void Parse_LoRa_Packet(void);
+void Parse_LoRa_Command(void);
 #endif
-
-static uint8_t Calculate_Checksum(const uint8_t* data, uint8_t len)
-{
-    uint8_t sum = 0;
-    for(uint8_t i = 0; i < len; i++) sum += data[i];
-    return sum;
-}
 
 void LoRa_Dual_Test_Run(void)
 {
     // 1. 基础初始化
-    SysTick_Init(); // [新增] 初始化系统滴答
+    SysTick_Init(); 
     LED_Init();
     Serial_Init();
     LoRa_Init();
@@ -46,102 +38,90 @@ void LoRa_Dual_Test_Run(void)
     printf("\r\n[SYSTEM] Booting... Role: %s\r\n", (CURRENT_ROLE==1)?"SENDER":"RECEIVER");
 
     // 2. 执行 LoRa 自检与配置
-    // 如果自检失败，死循环报错
     if (!LoRa_Init_And_SelfCheck(TARGET_ADDR))
     {
         printf("[SYSTEM] LoRa Init Failed! System Halted.\r\n");
         while(1) {
-            // 快速闪烁 LED 报错
             LED1_Turn(); Delay_ms(100);
         }
     }
 
-    // 自检通过，进入主循环
     printf("[SYSTEM] LoRa Init Success. Entering Main Loop.\r\n");
 
 #if (CURRENT_ROLE == 1)
     // ==========================================
     //           发送端逻辑 (Board A)
     // ==========================================
-    int count = 0;
-    uint8_t send_buffer[64]; 
-    char command_str[32]; // 稍微加大一点
+    uint8_t toggle_state = 0;
+    char send_buffer[64]; 
 
     while (1)
     {
-        // 1. 构造动态数据：包含计数器，方便检测丢包
-        sprintf(command_str, "PING:%d", count);
-        
-        uint8_t *p_buf = send_buffer;
-        uint8_t cmd_len = strlen(command_str);
-        uint16_t total_len = 0;
-
-        // --- 协议封装 ---
-        *p_buf++ = LORA_PACKET_HEADER_0;
-        *p_buf++ = LORA_PACKET_HEADER_1;
-        *p_buf++ = cmd_len;
-        memcpy(p_buf, command_str, cmd_len);
-        p_buf += cmd_len;
-        *p_buf++ = Calculate_Checksum((uint8_t*)command_str, cmd_len);
-        *p_buf++ = LORA_PACKET_TAIL_0;
-        *p_buf++ = LORA_PACKET_TAIL_1;
-        
-        total_len = p_buf - send_buffer;
+        // 1. 构造文本指令包: Header + Command + Tail
+        // 格式: CMLED_on\n\n 或 CMLED_off\n\n
+        if (toggle_state == 0)
+        {
+            sprintf(send_buffer, "%c%c%s%c%c", 
+                    LORA_CMD_HEADER_0, LORA_CMD_HEADER_1, 
+                    CMD_STR_LED_ON, 
+                    LORA_CMD_TAIL_0, LORA_CMD_TAIL_1);
+            toggle_state = 1;
+        }
+        else
+        {
+            sprintf(send_buffer, "%c%c%s%c%c", 
+                    LORA_CMD_HEADER_0, LORA_CMD_HEADER_1, 
+                    CMD_STR_LED_OFF, 
+                    LORA_CMD_TAIL_0, LORA_CMD_TAIL_1);
+            toggle_state = 0;
+        }
 
         // 2. 发送
-        BSP_UART3_SendBytes(send_buffer, total_len);
+        BSP_UART3_SendString(send_buffer);
         
-        printf("[Tx] Sent: %s (Len:%d)\r\n", command_str, total_len);
+        printf("[Tx] Sent: %s", send_buffer); // \n\n 已经在buffer里了，所以这里不用加 \r\n
         
-        // 3. 状态指示
+        // 3. 状态指示 (发送时闪一下)
         LED1_ON();
         Delay_ms(50);
         LED1_OFF();
 
-        // 4. 延时 (建议先设为 2秒，给接收端充足的处理和打印时间)
+        // 4. 延时 2秒
         Delay_ms(2000);
-        
-        count++;
     }
-
-
 
 #else
     // ==========================================
     //           接收端逻辑 (Board B)
     // ==========================================
-    printf("[Rx] Waiting for LoRa packets...\r\n");
+    printf("[Rx] Waiting for LoRa commands (CM...\\n\\n)...\r\n");
+    
+    uint8_t temp_dma_buf[128]; 
 
     while (1)
     {
-
-        // 1. DMA数据搬运 (保持不变)
-        if (UART3_RxFlag == 1)
+        // 1. 从 DMA 循环缓冲区读取数据
+        uint16_t len = BSP_UART3_ReadRxBuffer(temp_dma_buf, sizeof(temp_dma_buf));
+        
+        if (len > 0)
         {
-					
-            // 打印底层接收到的原始字节数，用于诊断分包情况
-            // printf("[DMA] Recv %d bytes\r\n", UART3_RxLength); 
-//    printf("[Debug] Raw Hex: ");
-//    for(int k=0; k<UART3_RxLength; k++) printf("%02X ", UART3_RxBuffer[k]);
-//    printf("\r\n");
-					
-            if (g_app_rx_len + UART3_RxLength < APP_RX_BUF_SIZE)
+            // 搬运到应用层解析缓冲区
+            if (g_app_rx_len + len < APP_RX_BUF_SIZE)
             {
-                memcpy(&g_app_rx_buffer[g_app_rx_len], UART3_RxBuffer, UART3_RxLength);
-                g_app_rx_len += UART3_RxLength;
+                memcpy(&g_app_rx_buffer[g_app_rx_len], temp_dma_buf, len);
+                g_app_rx_len += len;
             }
             else
             {
-                g_app_rx_len = 0;
-                printf("[Error] Buffer Overflow! Reset.\r\n");
+                g_app_rx_len = 0; // 溢出复位
+                printf("[Error] App Buffer Overflow!\r\n");
             }
-            BSP_UART3_ResetRx();
         }
-
+					
         // 2. 协议解析
         if (g_app_rx_len > 0)
         {
-            Parse_LoRa_Packet();
+            Parse_LoRa_Command();
         }
     }
 #endif
@@ -149,85 +129,104 @@ void LoRa_Dual_Test_Run(void)
 }
 
 #if (CURRENT_ROLE == 2)
-void Parse_LoRa_Packet(void)
+void Parse_LoRa_Command(void)
 {
     uint16_t i = 0;
+    uint16_t processed_len = 0;
     
-    while (i < g_app_rx_len)
+    // 至少需要4个字节才能构成最小包 (CM\n\n)
+    while (i + 4 <= g_app_rx_len)
     {
-        // 1. 寻找包头
-        if (g_app_rx_buffer[i] == LORA_PACKET_HEADER_0 && 
-            (i + 1 < g_app_rx_len) && 
-            g_app_rx_buffer[i+1] == LORA_PACKET_HEADER_1)
+        // 1. 寻找包头 "CM"
+        if (g_app_rx_buffer[i] == LORA_CMD_HEADER_0 && 
+            g_app_rx_buffer[i+1] == LORA_CMD_HEADER_1)
         {
-            // 找到包头
-            if (i + 2 < g_app_rx_len)
+            // 找到包头，现在向后寻找包尾 "\n\n"
+            // 从包头后面开始找 (i+2)
+            int tail_index = -1;
+            for (int j = i + 2; j < g_app_rx_len - 1; j++)
             {
-                uint8_t cmd_len = g_app_rx_buffer[i + 2];
-                
-                // 简单的长度合理性检查
-                if (cmd_len == 0 || cmd_len > MAX_CMD_LENGTH) {
-                    printf("[Rx Err] Invalid Len: %d. Skip header.\r\n", cmd_len);
-                    i++; continue;
-                }
-                
-                uint16_t packet_total_len = 2 + 1 + cmd_len + 1 + 2;
-
-                if (i + packet_total_len <= g_app_rx_len)
+                if (g_app_rx_buffer[j] == LORA_CMD_TAIL_0 && 
+                    g_app_rx_buffer[j+1] == LORA_CMD_TAIL_1)
                 {
-                    uint8_t* packet_start = &g_app_rx_buffer[i];
-                    
-                    // 校验
-                    uint8_t calc_sum = Calculate_Checksum(packet_start + 3, cmd_len);
-                    uint8_t recv_sum = packet_start[3 + cmd_len];
-                    
-                    if (recv_sum == calc_sum &&
-                        packet_start[packet_total_len - 2] == LORA_PACKET_TAIL_0 &&
-                        packet_start[packet_total_len - 1] == LORA_PACKET_TAIL_1)
-                    {
-                        // --- 成功接收 ---
-                        char cmd_buffer[MAX_CMD_LENGTH + 1] = {0};
-                        memcpy(cmd_buffer, packet_start + 3, cmd_len);
-                        
-                        printf("[Rx OK] Payload: %s\r\n", cmd_buffer);
-                        
-                        // 业务逻辑处理
-                        if (strncmp(cmd_buffer, "PING:", 5) == 0) {
-                            LED1_Turn(); // 收到PING就闪灯
-                        }
-
-                        // 移除已处理数据
-                        uint16_t processed_len = i + packet_total_len;
-                        g_app_rx_len -= processed_len;
-                        memmove(g_app_rx_buffer, &g_app_rx_buffer[processed_len], g_app_rx_len);
-                        i = 0; 
-                        continue; 
-                    }
-                    else {
-                        printf("[Rx Err] Checksum/Tail Fail. CalcSum:%02X, RecvSum:%02X\r\n", calc_sum, recv_sum);
-                        i++; // 校验失败，跳过这个“伪包头”
-                    }
+                    tail_index = j;
+                    break;
                 }
-                else {
-                    // 包不完整，等待更多数据
-                    break; 
-                }
-            } else {
-                // 长度字段还没收到，等待
-                break;
             }
-        } else {
-            i++; // 不是包头，继续找
+
+            if (tail_index != -1)
+            {
+                // --- 找到完整数据包 ---
+                // 包头位置: i
+                // 包尾位置: tail_index
+                // 指令起始: i + 2
+                // 指令长度: tail_index - (i + 2)
+                
+                uint16_t cmd_start_idx = i + 2;
+                uint16_t cmd_len = tail_index - cmd_start_idx;
+                
+                // 提取指令字符串 (为了安全，拷贝到临时buffer并添加结束符)
+                char cmd_str[32] = {0};
+                if (cmd_len < 32)
+                {
+                    memcpy(cmd_str, &g_app_rx_buffer[cmd_start_idx], cmd_len);
+                    cmd_str[cmd_len] = '\0'; // 确保是字符串
+                    
+                    printf("[Rx CMD] Got: %s\r\n", cmd_str);
+                    
+                    // --- 执行动作 ---
+                    if (strcmp(cmd_str, CMD_STR_LED_ON) == 0)
+                    {
+                        printf("  -> Action: LED ON\r\n");
+                        LED1_ON();
+                    }
+                    else if (strcmp(cmd_str, CMD_STR_LED_OFF) == 0)
+                    {
+                        printf("  -> Action: LED OFF\r\n");
+                        LED1_OFF();
+                    }
+                    else
+                    {
+                        printf("  -> Unknown Command\r\n");
+                    }
+                }
+                
+                // 标记处理完的位置 (包尾的后一位 + 1)
+                // tail_index 是第一个\n, tail_index+1 是第二个\n
+                // 所以下一包开始位置是 tail_index + 2
+                i = tail_index + 2;
+                processed_len = i;
+                continue; // 继续寻找缓冲区里是否还有下一个包
+            }
+            else
+            {
+                // 找到了头，但没找到尾，说明包还没收全
+                // 退出循环，等待下一次 DMA 搬运更多数据进来
+                break; 
+            }
+        }
+        else
+        {
+            // 不是包头，移动一位继续找
+            i++;
+            processed_len = i;
         }
     }
     
-    // 清理无效数据
-    if (i > 0 && i >= g_app_rx_len) {
-        g_app_rx_len = 0;
-    } else if (i > 0) {
-        g_app_rx_len -= i;
-        memmove(g_app_rx_buffer, &g_app_rx_buffer[i], g_app_rx_len);
+    // 3. 移除已处理的数据 (滑动窗口)
+    if (processed_len > 0)
+    {
+        if (processed_len < g_app_rx_len)
+        {
+            // 把剩下的数据搬到最前面
+            memmove(g_app_rx_buffer, &g_app_rx_buffer[processed_len], g_app_rx_len - processed_len);
+            g_app_rx_len -= processed_len;
+        }
+        else
+        {
+            // 全部处理完了
+            g_app_rx_len = 0;
+        }
     }
 }
-
 #endif
