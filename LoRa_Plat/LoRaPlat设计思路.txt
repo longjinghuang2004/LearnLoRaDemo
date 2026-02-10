@@ -1,0 +1,133 @@
+================================================================================
+                LoRaPlat 4层架构设计规格说明书 (Finalized v1.0)
+================================================================================
+
+[1. 总体架构原则]
+--------------------------------------------------------------------------------
+1. 内存策略: 
+   - 采用 "共享大缓存 (Shared Static Buffer)" 模式。
+   - 发送和接收缓冲区定义在 Layer 3 (Manager)，各层通过指针访问，避免拷贝。
+   - RAM分配: TxBuffer[512B] + RxBuffer[512B]。
+
+2. 运行机制: 
+   - 全程 "非阻塞 (Non-blocking)"。
+   - 依赖 "System Tick" 进行超时判断和状态流转。
+   - 禁止在 Core/Manager 层使用 HAL_Delay 或 while() 死等。
+
+3. 错误处理:
+   - "回调机制 (Callback)"。底层发现问题（如ACK超时、发送失败），通过函数指针通知 App 层。
+   - App 层负责决策（重试计数、报警、复位）。
+
+[2. 协议帧结构定义 (Layer 3 负责组包/解包)]
+--------------------------------------------------------------------------------
+物理帧格式 (Total Overhead: 13 Bytes):
+[Head:2] [Len:1] [Ctrl:1] [Seq:1] [TgtID:2] [SrcID:2] [Payload:N] [CRC:2] [Tail:2]
+
+1. Head:    0x43 0x4D ('C', 'M')
+2. Len:     Payload长度 (不含头尾和开销，仅数据部分)
+3. Ctrl:    控制字
+            - Bit[7]: 0=数据帧, 1=ACK帧
+            - Bit[6]: 0=无需ACK, 1=需要ACK
+            - Bit[5]: 0=无CRC, 1=含CRC16
+            - Bit[0-4]: 保留
+4. Seq:     包序号 (0-255)，用于ACK匹配和去重
+5. TgtID:   目标设备ID (2字节，软件地址过滤用)
+6. SrcID:   源设备ID (2字节)
+7. Payload: 业务数据 (JSON等)
+8. CRC:     CRC16校验值 (仅当Ctrl.Bit5=1时存在，否则占位或省略)
+9. Tail:    0x0D 0x0A ('\r', '\n')
+
+[3. 分层职责详解]
+--------------------------------------------------------------------------------
+
+Layer 1: Port (硬件抽象层)
+---------------------------------------
+[文件]: lora_port.c / .h
+[职责]: 
+  - 抹平硬件差异，提供统一接口。
+  - 提供毫秒级系统时基 (GetTick)。
+[核心接口]:
+  - Port_Init(): 初始化UART, DMA, GPIO。
+  - Port_WriteData(*data, len): 启动DMA发送 (非阻塞)。
+  - Port_ReadData(*buf, max_len): 从DMA循环缓冲读取数据。
+  - Port_SetResetPin(level): 控制RST引脚。
+  - Port_SetModePin(level): 控制MD0引脚。
+  - Port_GetAuxPin(): 读取AUX状态。
+  - Port_GetTick(): 返回系统运行毫秒数。
+
+Layer 2: Core (设备驱动层)
+---------------------------------------
+[文件]: mod_lora.c / .h
+[职责]: 
+  - 翻译 AT 指令，管理模块物理状态。
+  - 不涉及复杂协议逻辑，只负责“让模块执行动作”。
+[核心接口]:
+  - Core_Init(): 绑定Port层接口。
+  - Core_SetMode(mode): 切换MD0电平 (不含延时，由App控制时序)。
+  - Core_CheckAux(): 返回模块忙/闲状态 (非阻塞)。
+  - Core_SendRaw(): 调用Port发送原始数据。
+  - Core_HardReset(): 拉动RST引脚复位模块。
+  - Core_ParseAT(*resp): 简单的AT响应匹配 (如查找 "OK")。
+
+Layer 3: Manager (协议栈与状态机层) - **核心**
+---------------------------------------
+[文件]: lora_manager.c / .h
+[职责]: 
+  - 维护共享缓冲区 (g_LoRaManager)。
+  - 运行发送/接收状态机 (FSM)。
+  - 协议封包 (Pack) 与 解包 (Unpack)。
+  - 软件地址过滤 (匹配 TargetID)。
+  - ACK 等待与超时判断。
+  - CRC 计算与校验。
+[核心数据结构]:
+  - struct LoRa_Manager_t {
+      TxBuf[512], RxBuf[512];
+      State;          // IDLE, TX_WAIT_AUX, TX_SENDING, WAIT_ACK
+      Config;         // 本机ID, 是否开启CRC, 是否开启ACK
+      Callbacks;      // OnTxSuccess, OnTxFailed, OnRxData
+      RetryCount;     // (可选，若由App管理则此处只负责单次发送)
+  }
+[核心接口]:
+  - Manager_Init(*cfg, *callbacks): 初始化并注册回调。
+  - Manager_SendPacket(*payload, len): 用户请求发送 (非阻塞，存入TxBuf并启动FSM)。
+  - Manager_Run(): **主循环轮询函数**，驱动状态机流转。
+  - Manager_EnableCRC(bool): 开关CRC功能。
+
+Layer 4: App (业务应用层)
+---------------------------------------
+[文件]: lora_app.c / .h (或集成在 main.c)
+[职责]: 
+  - 业务逻辑决策。
+  - 注册 Manager 的回调函数。
+  - 错误恢复策略 (重试计数、报警)。
+  - 模式切换时序控制 (如: 切换到配置模式 -> 延时 -> 发AT -> 切回)。
+[逻辑示例]:
+  - OnTxFailed回调: 
+      if (retry_cnt < 3) { retry_cnt++; Manager_SendPacket(last_data); }
+      else { Log("Link Down"); }
+  - 接收处理:
+      解析 JSON，控制 LED。
+
+[4. 状态机设计 (Manager Layer FSM)]
+--------------------------------------------------------------------------------
+State 0: IDLE (空闲)
+  - 检查 RxBuffer 是否有新数据 -> 解析 -> 触发 OnRxData。
+  - 检查是否有待发送任务 -> 转入 TX_CHECK_AUX。
+
+State 1: TX_CHECK_AUX (等待物理层就绪)
+  - 轮询 Core_CheckAux()。
+  - 若空闲 -> Port_WriteData -> 转入 TX_SENDING。
+  - 若超时 -> 触发 OnTxFailed (Hardware Busy) -> 回到 IDLE。
+
+State 2: TX_SENDING (发送中)
+  - 等待 DMA 发送完成中断/标志。
+  - 发送完毕 -> 
+      若需ACK -> 记录时间戳 -> 转入 WAIT_ACK。
+      若无需ACK -> 触发 OnTxSuccess -> 回到 IDLE。
+
+State 3: WAIT_ACK (等待应答)
+  - 检查 RxBuffer 是否收到 ACK 包 (Seq匹配)。
+  - 若收到 -> 触发 OnTxSuccess -> 回到 IDLE。
+  - 若超时 -> 触发 OnTxFailed (Ack Timeout) -> 回到 IDLE。
+
+================================================================================
