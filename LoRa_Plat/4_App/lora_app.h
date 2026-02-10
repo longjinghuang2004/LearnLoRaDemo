@@ -1,41 +1,17 @@
 #ifndef __LORA_APP_H
 #define __LORA_APP_H
 
-#include <stdint.h>
+#include "LoRaPlatConfig.h" // 引入配置
 
-// ============================================================
-//                    角色配置 (烧录前修改此处)
-// ============================================================
-// 0: SLAVE (执行器 - 接收指令，回ACK，动作)
-// 1: HOST  (控制器 - 发送指令，等ACK)
-#define LORA_APP_ROLE       0
+// 角色定义 (可以在这里覆盖，或者在 Config.h 里定义)
+// 建议：角色属于业务逻辑，留在 App.h
+#define LORA_APP_ROLE       1 // 0:Slave, 1:Host
 
-// ============================================================
-//                    参数配置
-// ============================================================
-#define HOST_TARGET_ID      0x0002  // 主机发给谁
-#define SLAVE_LOCAL_ID      0x0002  // 从机自己的ID
-#define HOST_LOCAL_ID       0x0001  // 主机自己的ID
+// 目标 ID (业务相关)
+#define HOST_TARGET_ID      0x0002
+#define APP_SEND_INTERVAL   3000
 
-#define APP_SEND_INTERVAL   3000    // 主机自动发送间隔 (ms)
-
-// ============================================================
-//                    接口声明
-// ============================================================
-
-/**
- * @brief 业务初始化
- *        - 初始化 Manager
- *        - 配置 ID
- *        - 注册回调
- */
 void LoRa_App_Init(void);
-
-/**
- * @brief 业务主循环 (需在 main while(1) 中调用)
- *        - 驱动 Manager 状态机
- *        - 执行业务逻辑 (定时发送/解析执行)
- */
 void LoRa_App_Task(void);
 
-#endif // __LORA_APP_H
+#endif

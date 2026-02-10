@@ -1,6 +1,6 @@
 #include "lora_port.h"
 #include "stm32f10x.h"
-#include "Delay.h" // 假设 Delay.h 提供了 GetTick()
+#include "Delay.h" 
 #include <string.h>
 
 // --- 内部变量: DMA 缓冲区 ---
@@ -44,11 +44,12 @@ void Port_Init(void)
     GPIO_Init(GPIOA, &GPIO_InitStructure);
     
     // PA5 -> AUX (上拉输入)
+    // 注意：如果 AUX 悬空，IPU 会导致读出高电平(忙)。确保模块连接良好。
     GPIO_InitStructure.GPIO_Pin = GPIO_Pin_5;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
     GPIO_Init(GPIOA, &GPIO_InitStructure);
 
-    // 3. USART3 配置
+    // 3. USART3 配置 (默认 115200)
     USART_InitTypeDef USART_InitStructure;
     USART_InitStructure.USART_BaudRate = LORA_UART_BAUDRATE;
     USART_InitStructure.USART_WordLength = USART_WordLength_8b;
@@ -114,7 +115,6 @@ bool Port_GetAUX(void) {
 
 void Port_SetRST(bool level) {
     // 如果有 RST 引脚，在这里实现
-    // GPIO_WriteBit(GPIOA, GPIO_Pin_X, level ? Bit_SET : Bit_RESET);
 }
 
 uint16_t Port_WriteData(const uint8_t *data, uint16_t len) {
@@ -142,12 +142,14 @@ uint16_t Port_ReadData(uint8_t *buf, uint16_t max_len) {
     return cnt;
 }
 
+// [关键] 清空接收缓冲区
 void Port_ClearRxBuffer(void) {
+    // 将读指针直接同步到当前的写指针位置，相当于丢弃所有未读数据
     s_RxReadIndex = PORT_DMA_RX_BUF_SIZE - DMA_GetCurrDataCounter(DMA1_Channel3);
 }
 
 uint32_t Port_GetTick(void) {
-    return GetTick(); // 依赖 System/Delay.c
+    return GetTick(); 
 }
 
 // DMA TX 中断服务函数

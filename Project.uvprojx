@@ -339,7 +339,7 @@
               <MiscControls>--no-multibyte-chars</MiscControls>
               <Define>USE_STDPERIPH_DRIVER</Define>
               <Undefine></Undefine>
-              <IncludePath>.\Start;.\Library;.\User;.\System;.\Hardware;.\function;.\Model;.\LoRa_Plat;.\LoRa_Plat\Layer1_Test;.\LoRa_Plat\Layer2_Module;.\LoRa_Plat\Layer3_Driver;.\LoRa_Plat\1_Port;.\LoRa_Plat\2_Core;.\LoRa_Plat\3_Manager;.\LoRa_Plat\4_App</IncludePath>
+              <IncludePath>.\Start;.\Library;.\User;.\System;.\Hardware;.\function;.\Model;.\LoRa_Plat;.\LoRa_Plat\Layer1_Test;.\LoRa_Plat\Layer2_Module;.\LoRa_Plat\Layer3_Driver;.\LoRa_Plat\1_Port;.\LoRa_Plat\2_Core;.\LoRa_Plat\3_Manager;.\LoRa_Plat\4_App;.\LoRa_Plat\Driver</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -824,6 +824,11 @@
           <GroupName>LoRa_Plat</GroupName>
           <Files>
             <File>
+              <FileName>LoRaPlatConfig.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\LoRaPlatConfig.h</FilePath>
+            </File>
+            <File>
               <FileName>lora_port.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\LoRa_Plat\1_Port\lora_port.c</FilePath>
@@ -862,6 +867,16 @@
               <FileName>mod_lora.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\LoRa_Plat\2_Core\mod_lora.h</FilePath>
+            </File>
+            <File>
+              <FileName>driver_atk_lora01.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\Driver\driver_atk_lora01.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_driver.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\Driver\lora_driver.h</FilePath>
             </File>
           </Files>
         </Group>
