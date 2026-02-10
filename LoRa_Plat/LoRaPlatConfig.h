@@ -62,7 +62,7 @@ typedef struct {
 #define LORA_ENABLE_CRC         true
 #define LORA_DEBUG_PRINT        1
 
-#define LORA_ACK_DELAY_MS       50
+#define LORA_ACK_DELAY_MS       100
 #define LORA_TX_TIMEOUT_MS      1000
 #define LORA_ACK_TIMEOUT_MS     2000
 #define LORA_MAX_RETRY          3

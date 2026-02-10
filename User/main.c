@@ -5,15 +5,16 @@
 #include "lora_app.h"
 #include "lora_driver.h" 
 #include "Flash.h"
+#include "cJSON.h" // 需要解析 JSON
 #include <string.h>
 #include <stdio.h>
 
 // ============================================================
 //                    测试角色配置
 // ============================================================
-// 1: 主机 (Host) - ID: 0x0002
+// 1: 主机 (Host) - ID: 0x0001 (与从机一致，透传互通)
 // 2: 从机 (Slave) - ID: 0x0001
-#define TEST_ROLE       1
+#define TEST_ROLE       2
 
 // ============================================================
 //                    主机本地调试配置
@@ -24,6 +25,51 @@ volatile uint8_t g_TimeoutFlag;
 
 // 声明外部函数以便本地调用
 extern void App_FactoryReset(void);
+
+// [新增] 打印当前 LoRa 参数状态
+static void Print_LoRa_Status(void) {
+    printf("\r\n=== LoRa Device Status ===\r\n");
+    printf("  Addr (HW/SW):  0x%04X\r\n", g_LoRaConfig_Current.addr);
+    printf("  Channel:       %d (Freq: %d MHz)\r\n", g_LoRaConfig_Current.channel, 410 + g_LoRaConfig_Current.channel);
+    printf("  Power:         %d (0=11dBm, 3=20dBm)\r\n", g_LoRaConfig_Current.power);
+    printf("  Air Rate:      %d\r\n", g_LoRaConfig_Current.air_rate);
+    printf("  Mode (TMODE):  %d (0=Transparent, 1=Fixed)\r\n", g_LoRaConfig_Current.tmode);
+    printf("==========================\r\n");
+}
+
+// [新增] 处理本地配置指令
+static void Handle_Local_Command(const char *json_str) {
+    cJSON *root = cJSON_Parse(json_str);
+    if (!root) return;
+
+    cJSON *cmd_item = cJSON_GetObjectItem(root, "cmd");
+    if (cmd_item && strcmp(cmd_item->valuestring, "LOCAL_SET") == 0) {
+        printf("[MAIN] Applying Local Config...\r\n");
+        
+        // 解析参数并更新全局配置
+        cJSON *item;
+        item = cJSON_GetObjectItem(root, "ch");
+        if (item) g_LoRaConfig_Current.channel = (uint8_t)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(root, "addr");
+        if (item) g_LoRaConfig_Current.addr = (uint16_t)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(root, "pwr");
+        if (item) g_LoRaConfig_Current.power = (uint8_t)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(root, "tmode");
+        if (item) g_LoRaConfig_Current.tmode = (uint8_t)item->valuedouble;
+
+        // 应用配置到模块
+        if (Drv_ApplyConfig(&g_LoRaConfig_Current)) {
+            // 打印完整信息
+            Print_LoRa_Status();
+        } else {
+            printf("[MAIN] Config Failed!\r\n");
+        }
+    }
+    cJSON_Delete(root);
+}
 
 int main(void)
 {
@@ -45,15 +91,17 @@ int main(void)
 
     // 初始化 LoRa
     LoRa_App_Init(my_id);
+    
+    // [新增] 启动时打印一次状态
+    Print_LoRa_Status();
 
     #if (TEST_ROLE == 1 && HOST_FORCE_CH_10 == 1)
         printf("[TEST] Host forcing local channel to 10...\r\n");
-        LoRa_Config_t temp_cfg;
-        Flash_ReadLoRaConfig(&temp_cfg);
-        temp_cfg.channel = 10; 
-        Drv_ApplyConfig(&temp_cfg); 
+        g_LoRaConfig_Current.channel = 10; 
+        Drv_ApplyConfig(&g_LoRaConfig_Current); 
         extern void Port_ClearRxBuffer(void);
         Port_ClearRxBuffer();
+        Print_LoRa_Status();
     #endif
 
     printf("[SYS] Loop Start. Waiting for commands...\r\n");
@@ -75,8 +123,12 @@ int main(void)
             {
                 printf("[HOST] PC Input: %s\r\n", input_str);
                 
-                // [新增] 本地救砖指令
-                if (strcmp(input_str, "LOCAL_RESET") == 0) {
+                // [新增] 本地配置指令处理
+                if (strstr(input_str, "LOCAL_SET")) {
+                    Handle_Local_Command(input_str);
+                }
+                // 本地救砖指令
+                else if (strcmp(input_str, "LOCAL_RESET") == 0) {
                     App_FactoryReset();
                 }
                 else {
