@@ -12,4 +12,7 @@ void LoRa_App_Init(uint16_t override_local_id);
 
 void LoRa_App_Task(void);
 
+// [新增] 暴露全局配置对象供 main.c 访问
+extern LoRa_Config_t g_LoRaConfig_Current;
+
 #endif

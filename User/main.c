@@ -22,6 +22,9 @@
 
 volatile uint8_t g_TimeoutFlag; 
 
+// 声明外部函数以便本地调用
+extern void App_FactoryReset(void);
+
 int main(void)
 {
     SysTick_Init();
@@ -32,15 +35,15 @@ int main(void)
 
     printf("\r\n=========================================\r\n");
     #if (TEST_ROLE == 1)
-        printf("      [MODE] HOST (ID: 0x0002)           \r\n");
-        uint16_t my_id = 0x0002;
+        printf("      [MODE] HOST (ID: 0x0001)           \r\n");
+        uint16_t my_id = 0x0001;
     #else
         printf("      [MODE] SLAVE (ID: 0x0001)          \r\n");
         uint16_t my_id = 0x0001;
     #endif
     printf("=========================================\r\n");
 
-    // 初始化 LoRa，传入角色 ID
+    // 初始化 LoRa
     LoRa_App_Init(my_id);
 
     #if (TEST_ROLE == 1 && HOST_FORCE_CH_10 == 1)
@@ -49,7 +52,6 @@ int main(void)
         Flash_ReadLoRaConfig(&temp_cfg);
         temp_cfg.channel = 10; 
         Drv_ApplyConfig(&temp_cfg); 
-        // 再次清空，防止 Apply 产生垃圾
         extern void Port_ClearRxBuffer(void);
         Port_ClearRxBuffer();
     #endif
@@ -73,12 +75,17 @@ int main(void)
             {
                 printf("[HOST] PC Input: %s\r\n", input_str);
                 
-                // 默认发给从机 (ID: 0x0001)
-                // 如果你想广播，改用 0xFFFF
-                printf("[HOST] Sending to 0x0001...\r\n");
-                LED1_ON();
-                Manager_SendPacket((uint8_t*)input_str, len, 0x0001);
-                LED1_OFF();
+                // [新增] 本地救砖指令
+                if (strcmp(input_str, "LOCAL_RESET") == 0) {
+                    App_FactoryReset();
+                }
+                else {
+                    // 默认发给从机 (ID: 0x0001)
+                    printf("[HOST] Sending to 0x0001...\r\n");
+                    LED1_ON();
+                    Manager_SendPacket((uint8_t*)input_str, len, 0x0001);
+                    LED1_OFF();
+                }
             }
             Serial_RxFlag = 0;
         }

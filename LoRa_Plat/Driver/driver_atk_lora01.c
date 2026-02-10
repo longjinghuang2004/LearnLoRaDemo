@@ -90,27 +90,23 @@ void Drv_HardReset(void) {
     Delay_ms(100);
 }
 
+// 救砖配置：始终恢复到最保守的状态 (透传, 地址0)
 bool Drv_SmartConfig(void) {
-    // 此函数主要用于出厂救砖，逻辑保持不变
-    // 但为了保险，这里也强制设为 0 地址
-    printf("[DRV] Smart Config Start...\r\n");
+    printf("[DRV] Smart Config (Factory Reset) Start...\r\n");
     
     Drv_SetMode(1);
     Delay_ms(600); 
     
     bool link_ok = false;
     
+    // 尝试 115200
     if (_SendAT("AT\r\n", "OK", 200)) {
         link_ok = true;
-        printf("[DRV] Link OK at 115200.\r\n");
-    } 
-    else {
-        printf("[DRV] 115200 Fail. Trying 9600...\r\n");
+    } else {
+        // 尝试 9600
         _ReInitUart(9600);
         Delay_ms(100);
-        
         if (_SendAT("AT\r\n", "OK", 200)) {
-            printf("[DRV] Link OK at 9600. Switching module to 115200...\r\n");
             if (_SendAT("AT+UART=7,0\r\n", "OK", 500)) {
                 _ReInitUart(115200);
                 Delay_ms(100);
@@ -125,34 +121,28 @@ bool Drv_SmartConfig(void) {
         return false;
     }
     
+    // 强制恢复默认
     char cmd[64];
-    // [关键修改] 强制硬件地址为 0
-    _SendAT("AT+ADDR=00,00\r\n", "OK", 500);
-    Delay_ms(50);
-
+    _SendAT("AT+ADDR=00,00\r\n", "OK", 500); Delay_ms(50);
     sprintf(cmd, "AT+WLRATE=%d,%d\r\n", DEFAULT_LORA_CHANNEL, _MapRate(DEFAULT_LORA_RATE));
-    _SendAT(cmd, "OK", 500);
-    Delay_ms(50);
-    
+    _SendAT(cmd, "OK", 500); Delay_ms(50);
     sprintf(cmd, "AT+TPOWER=%d\r\n", _MapPower(DEFAULT_LORA_POWER));
-    _SendAT(cmd, "OK", 500);
-    Delay_ms(50);
-    
-    _SendAT("AT+TMODE=0\r\n", "OK", 500);
-    Delay_ms(50);
+    _SendAT(cmd, "OK", 500); Delay_ms(50);
+    _SendAT("AT+TMODE=0\r\n", "OK", 500); Delay_ms(50); // 强制透传
     _SendAT("AT+CWMODE=0\r\n", "OK", 500);
     
     Drv_SetMode(0);
     Delay_ms(600); 
     while (Drv_IsBusy()); 
     
-    printf("[DRV] Config Success!\r\n");
+    printf("[DRV] Factory Reset Success!\r\n");
     return true;
 }
 
+// 应用用户配置
 bool Drv_ApplyConfig(const LoRa_Config_t *cfg) {
-    printf("[DRV] Applying Config: Addr=0x%04X, Ch=%d, Rate=%d, Pwr=%d\r\n", 
-           cfg->addr, cfg->channel, cfg->air_rate, cfg->power);
+    printf("[DRV] Applying: Addr=0x%04X, Ch=%d, Rate=%d, Pwr=%d, Mode=%d\r\n", 
+           cfg->addr, cfg->channel, cfg->air_rate, cfg->power, cfg->tmode);
     
     Drv_SetMode(1);
     Delay_ms(600); 
@@ -160,17 +150,23 @@ bool Drv_ApplyConfig(const LoRa_Config_t *cfg) {
     char cmd[64];
     bool success = true;
 
-    // [关键修改] 
-    // 无论 cfg->addr 是多少（那是软件ID），
-    // 发给模块的硬件地址永远是 00,00，确保物理层透传互通。
-    if (!_SendAT("AT+ADDR=00,00\r\n", "OK", 500)) success = false;
+    // 1. 设置地址 (支持用户自定义)
+    sprintf(cmd, "AT+ADDR=%02X,%02X\r\n", (cfg->addr >> 8) & 0xFF, cfg->addr & 0xFF);
+    if (!_SendAT(cmd, "OK", 500)) success = false;
     Delay_ms(50);
 
+    // 2. 设置速率信道
     sprintf(cmd, "AT+WLRATE=%d,%d\r\n", cfg->channel, cfg->air_rate);
     if (!_SendAT(cmd, "OK", 500)) success = false;
     Delay_ms(50);
 
+    // 3. 设置功率
     sprintf(cmd, "AT+TPOWER=%d\r\n", cfg->power);
+    if (!_SendAT(cmd, "OK", 500)) success = false;
+    Delay_ms(50);
+
+    // 4. 设置传输模式 (透传/定向)
+    sprintf(cmd, "AT+TMODE=%d\r\n", cfg->tmode);
     if (!_SendAT(cmd, "OK", 500)) success = false;
     Delay_ms(50);
 
@@ -181,7 +177,7 @@ bool Drv_ApplyConfig(const LoRa_Config_t *cfg) {
     Port_ClearRxBuffer();
 
     if (success) printf("[DRV] Apply Success!\r\n");
-    else printf("[DRV] Apply Failed (Partial?)\r\n");
+    else printf("[DRV] Apply Failed!\r\n");
     
     return success;
 }

@@ -4,7 +4,7 @@
 #include "lora_port.h" 
 #include "Flash.h"       
 #include "cJSON.h"
-#include "LED.h"         // [关键] 引入 LED 驱动
+#include "LED.h"         
 #include <stdio.h>
 #include <string.h>
 
@@ -28,6 +28,29 @@ static void _App_EnterConfigMode(uint32_t token);
 static void _App_CommitConfig(void);
 static void _App_AbortConfig(void);
 
+// [新增] 工厂重置函数
+void App_FactoryReset(void) {
+    printf("[APP] !!! FACTORY RESET !!!\r\n");
+    
+    // 1. 恢复默认配置结构体
+    g_LoRaConfig_Current.magic    = LORA_CFG_MAGIC;
+    g_LoRaConfig_Current.token    = DEFAULT_LORA_TOKEN;
+    g_LoRaConfig_Current.addr     = DEFAULT_LORA_ADDR;
+    g_LoRaConfig_Current.channel  = DEFAULT_LORA_CHANNEL;
+    g_LoRaConfig_Current.power    = (uint8_t)DEFAULT_LORA_POWER;
+    g_LoRaConfig_Current.air_rate = (uint8_t)DEFAULT_LORA_RATE;
+    g_LoRaConfig_Current.tmode    = (uint8_t)DEFAULT_LORA_TMODE;
+    
+    // 2. 写入 Flash
+    Flash_WriteLoRaConfig(&g_LoRaConfig_Current);
+    
+    // 3. 调用驱动层救砖逻辑
+    Drv_SmartConfig();
+    
+    // 4. 软件复位
+    NVIC_SystemReset();
+}
+
 // --- 回调函数 ---
 static void _App_OnRxData(uint8_t *data, uint16_t len, uint16_t src_id) {
     if (len >= MGR_RX_BUF_SIZE) len = MGR_RX_BUF_SIZE - 1;
@@ -50,13 +73,13 @@ static void _App_OnRxData(uint8_t *data, uint16_t len, uint16_t src_id) {
         } 
         else if (strcmp(cmd_str, "LED_ON") == 0) {
             if (s_AppState == APP_STATE_NORMAL) {
-                LED1_ON();  // [修复] 执行动作
+                LED1_ON(); 
                 printf("[APP] Action: LED ON\r\n");
             }
         }
         else if (strcmp(cmd_str, "LED_OFF") == 0) {
             if (s_AppState == APP_STATE_NORMAL) {
-                LED1_OFF(); // [修复] 执行动作
+                LED1_OFF();
                 printf("[APP] Action: LED OFF\r\n");
             }
         }
@@ -90,8 +113,12 @@ static void _App_HandleConfigCommand(cJSON *root) {
         item = cJSON_GetObjectItem(root, "pwr");
         if (item) g_LoRaConfig_Pending.power = (uint8_t)item->valuedouble;
         
-        printf("[APP] Pending Update: Ch=%d, Addr=0x%04X\r\n", 
-               g_LoRaConfig_Pending.channel, g_LoRaConfig_Pending.addr);
+        // [新增] 解析 tmode
+        item = cJSON_GetObjectItem(root, "tmode");
+        if (item) g_LoRaConfig_Pending.tmode = (uint8_t)item->valuedouble;
+        
+        printf("[APP] Pending Update: Ch=%d, Addr=0x%04X, Mode=%d\r\n", 
+               g_LoRaConfig_Pending.channel, g_LoRaConfig_Pending.addr, g_LoRaConfig_Pending.tmode);
     }
     else if (strcmp(cmd, "CFG_COMMIT") == 0) {
         if (s_AppState == APP_STATE_CONFIGURING) {
@@ -100,6 +127,10 @@ static void _App_HandleConfigCommand(cJSON *root) {
     }
     else if (strcmp(cmd, "CFG_ABORT") == 0) {
         _App_AbortConfig();
+    }
+    // [新增] 远程重置指令
+    else if (strcmp(cmd, "CFG_RESET") == 0) {
+        App_FactoryReset();
     }
 }
 
@@ -136,8 +167,8 @@ void LoRa_App_Init(uint16_t override_local_id) {
         g_LoRaConfig_Current.addr = override_local_id;
     }
     
-    printf("[APP] Config Loaded: Addr=0x%04X, Ch=%d\r\n", 
-           g_LoRaConfig_Current.addr, g_LoRaConfig_Current.channel);
+    printf("[APP] Config Loaded: Addr=0x%04X, Ch=%d, Mode=%d\r\n", 
+           g_LoRaConfig_Current.addr, g_LoRaConfig_Current.channel, g_LoRaConfig_Current.tmode);
     
     Manager_Init(_App_OnRxData, NULL, NULL);
     Drv_ApplyConfig(&g_LoRaConfig_Current);

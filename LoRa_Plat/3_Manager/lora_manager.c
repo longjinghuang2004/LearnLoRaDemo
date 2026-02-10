@@ -12,6 +12,9 @@
     #define LOG_DBG(...)
 #endif
 
+// 引入全局配置以获取 TMODE 和 Channel
+extern LoRa_Config_t g_LoRaConfig_Current; 
+
 LoRa_Manager_t g_LoRaManager;
 static uint16_t s_CurrentTxLen = 0;
 
@@ -34,11 +37,10 @@ void Manager_Init(OnRxData_t on_rx, OnTxResult_t on_tx, OnError_t on_err)
     // 1. 初始化底层 (包含 Smart Config)
     LoRa_Core_Init();
     
-    // [关键修改] 2. 彻底清空底层 DMA 缓冲区
-    // 消除 Drv_SmartConfig 产生的 "OK\r\n" 等残留数据
+    // 2. 彻底清空底层 DMA 缓冲区
     Port_ClearRxBuffer();
     
-    // 3. 初始化参数 (来自 Config.h)
+    // 3. 初始化参数
     g_LoRaManager.local_id = LORA_LOCAL_ID;
     
     g_LoRaManager.cb_on_rx = on_rx;
@@ -47,7 +49,7 @@ void Manager_Init(OnRxData_t on_rx, OnTxResult_t on_tx, OnError_t on_err)
     
     Manager_ResetState();
     g_LoRaManager.tx_seq = 0;
-    g_LoRaManager.rx_len = 0; // 确保上层缓冲也清空
+    g_LoRaManager.rx_len = 0; 
     
     LOG_DBG("[MGR] Init Done. ID:0x%04X\r\n", g_LoRaManager.local_id);
 }
@@ -56,7 +58,12 @@ bool Manager_SendPacket(const uint8_t *payload, uint16_t len, uint16_t target_id
 {
     if (g_LoRaManager.state != MGR_STATE_IDLE) return false;
     
+    // 计算开销：协议头(11) + CRC(2) + 定向头(3, 如果是定向模式)
     uint16_t overhead = 11 + (LORA_ENABLE_CRC ? 2 : 0);
+    if (g_LoRaConfig_Current.tmode == LORA_TMODE_FIXED) {
+        overhead += 3;
+    }
+
     if (len + overhead > MGR_TX_BUF_SIZE) {
         if (g_LoRaManager.cb_on_err) g_LoRaManager.cb_on_err(LORA_ERR_MEM_OVERFLOW);
         return false;
@@ -65,6 +72,14 @@ bool Manager_SendPacket(const uint8_t *payload, uint16_t len, uint16_t target_id
     uint8_t *p = g_LoRaManager.TxBuffer;
     uint16_t idx = 0;
     
+    // [新增] 如果是定向模式，插入 3 字节定向头
+    if (g_LoRaConfig_Current.tmode == LORA_TMODE_FIXED) {
+        p[idx++] = (uint8_t)(target_id >> 8);   // Target High
+        p[idx++] = (uint8_t)(target_id & 0xFF); // Target Low
+        p[idx++] = g_LoRaConfig_Current.channel;// Target Channel (同频)
+    }
+    
+    // 协议头
     p[idx++] = PROTOCOL_HEAD_0;
     p[idx++] = PROTOCOL_HEAD_1;
     p[idx++] = (uint8_t)len;
@@ -85,7 +100,10 @@ bool Manager_SendPacket(const uint8_t *payload, uint16_t len, uint16_t target_id
     idx += len;
     
     if (LORA_ENABLE_CRC) {
-        uint16_t crc = CRC16_Calc(&p[2], idx - 2);
+        // CRC 计算范围：从 Protocol Head 开始，不包含定向头
+        uint16_t crc_start_idx = (g_LoRaConfig_Current.tmode == LORA_TMODE_FIXED) ? 3 : 0;
+        // 跳过 Head0, Head1 (前2字节)
+        uint16_t crc = CRC16_Calc(&p[crc_start_idx + 2], idx - crc_start_idx - 2);
         p[idx++] = (uint8_t)(crc & 0xFF);
         p[idx++] = (uint8_t)(crc >> 8);
     }
@@ -137,13 +155,17 @@ void Manager_Run(void)
             break;
             
         case MGR_STATE_TX_SENDING:
-            if (g_LoRaManager.TxBuffer[3] & CTRL_MASK_NEED_ACK) {
-                g_LoRaManager.state = MGR_STATE_WAIT_ACK;
-                g_LoRaManager.state_tick = now;
-                LOG_DBG("[MGR] Waiting ACK...\r\n");
-            } else {
-                if (g_LoRaManager.cb_on_tx) g_LoRaManager.cb_on_tx(true);
-                Manager_ResetState();
+            // 检查是否需要 ACK (注意：定向头会偏移 Ctrl 字节的位置)
+            {
+                uint8_t ctrl_offset = (g_LoRaConfig_Current.tmode == LORA_TMODE_FIXED) ? 3+3 : 3;
+                if (g_LoRaManager.TxBuffer[ctrl_offset] & CTRL_MASK_NEED_ACK) {
+                    g_LoRaManager.state = MGR_STATE_WAIT_ACK;
+                    g_LoRaManager.state_tick = now;
+                    LOG_DBG("[MGR] Waiting ACK...\r\n");
+                } else {
+                    if (g_LoRaManager.cb_on_tx) g_LoRaManager.cb_on_tx(true);
+                    Manager_ResetState();
+                }
             }
             break;
             
@@ -224,7 +246,6 @@ static void Manager_ProcessRx(void) {
                         if ((ctrl & CTRL_MASK_TYPE) != 0) {
                             // 是 ACK 包，检查是否在等待 ACK
                             if (g_LoRaManager.state == MGR_STATE_WAIT_ACK) {
-                                // 简单检查：只要收到 ACK 就认为成功 (严格来说应该检查 Seq)
                                 LOG_DBG("[MGR] ACK Recv from 0x%04X\r\n", src_id);
                                 if (g_LoRaManager.cb_on_tx) g_LoRaManager.cb_on_tx(true);
                                 Manager_ResetState();
@@ -267,9 +288,16 @@ static void Manager_ProcessRx(void) {
 static void Manager_SendACK(uint16_t target_id, uint8_t seq) {
     Delay_ms(LORA_ACK_DELAY_MS); 
     
-    uint8_t ack_buf[16];
+    uint8_t ack_buf[32]; // 稍微加大一点以容纳定向头
     uint16_t idx = 0;
     
+    // [新增] 定向模式下的 ACK 也需要定向头
+    if (g_LoRaConfig_Current.tmode == LORA_TMODE_FIXED) {
+        ack_buf[idx++] = (uint8_t)(target_id >> 8);
+        ack_buf[idx++] = (uint8_t)(target_id & 0xFF);
+        ack_buf[idx++] = g_LoRaConfig_Current.channel;
+    }
+
     ack_buf[idx++] = PROTOCOL_HEAD_0;
     ack_buf[idx++] = PROTOCOL_HEAD_1;
     ack_buf[idx++] = 0; 
@@ -286,7 +314,9 @@ static void Manager_SendACK(uint16_t target_id, uint8_t seq) {
     ack_buf[idx++] = (uint8_t)(g_LoRaManager.local_id >> 8);
     
     if (LORA_ENABLE_CRC) {
-        uint16_t crc = CRC16_Calc(&ack_buf[2], idx - 2);
+        // CRC 计算范围：从 Protocol Head 开始
+        uint16_t crc_start_idx = (g_LoRaConfig_Current.tmode == LORA_TMODE_FIXED) ? 3 : 0;
+        uint16_t crc = CRC16_Calc(&ack_buf[crc_start_idx + 2], idx - crc_start_idx - 2);
         ack_buf[idx++] = (uint8_t)(crc & 0xFF);
         ack_buf[idx++] = (uint8_t)(crc >> 8);
     }
@@ -294,7 +324,6 @@ static void Manager_SendACK(uint16_t target_id, uint8_t seq) {
     ack_buf[idx++] = PROTOCOL_TAIL_0;
     ack_buf[idx++] = PROTOCOL_TAIL_1;
     
-    // 发送 ACK 时不检查忙闲，强制发送 (因为已经延时过了)
     Manager_DumpHex("[MGR] TX ACK", ack_buf, idx);
     LoRa_Core_SendRaw(ack_buf, idx);
 }
