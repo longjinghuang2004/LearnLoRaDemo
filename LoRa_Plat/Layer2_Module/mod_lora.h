@@ -23,7 +23,7 @@
 // 默认包头包尾 (ASCII: CM, \n\n)
 #define LORA_DEFAULT_HEAD_0         'C'
 #define LORA_DEFAULT_HEAD_1         'M'
-#define LORA_DEFAULT_TAIL_0         '\n'
+#define LORA_DEFAULT_TAIL_0         '\r'
 #define LORA_DEFAULT_TAIL_1         '\n'
 
 /* ========================================================================== */

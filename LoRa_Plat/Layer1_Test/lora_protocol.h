@@ -8,8 +8,8 @@
 #define LORA_CMD_HEADER_0       'C'
 #define LORA_CMD_HEADER_1       'M'
 
-// 包尾: "\n\n" (连续两个换行符)
-#define LORA_CMD_TAIL_0         '\n'
+// 包尾: "\r\n" 
+#define LORA_CMD_TAIL_0         '\r'
 #define LORA_CMD_TAIL_1         '\n'
 
 // 指令定义

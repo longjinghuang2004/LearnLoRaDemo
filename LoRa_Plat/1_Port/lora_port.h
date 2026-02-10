@@ -2,47 +2,33 @@
 #define __LORA_PORT_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
-/* ========================================================================== */
-/*                                 硬件初始化                                  */
-/* ========================================================================== */
+// 硬件相关宏定义
+#define LORA_UART_BAUDRATE  115200
 
-/**
- * @brief 初始化所有 LoRa 相关的硬件 (GPIO, UART, DMA, NVIC)
- */
-void Port_Hardware_Init(void);
+// --- 接口声明 ---
 
-/* ========================================================================== */
-/*                                 通道 A 接口                                 */
-/* ========================================================================== */
+// 端口初始化 (GPIO, UART, DMA, NVIC)
+void Port_Init(void);
 
-// UART 收发
-uint16_t Port_UART_A_Write(const uint8_t *data, uint16_t len);
-uint16_t Port_UART_A_Read(uint8_t *buf, uint16_t max_len);
+// 基础 IO 控制
+void Port_SetMD0(bool level);   // true=High(Config), false=Low(Comm)
+bool Port_GetAUX(void);         // true=High(Busy), false=Low(Idle)
+void Port_SetRST(bool level);   // true=High, false=Low(Reset active)
 
-// GPIO 控制
-void Port_Set_MD0_A(uint8_t level);
-void Port_Set_Reset_A(uint8_t level);
-uint8_t Port_Read_AUX_A(void);
+// 数据收发 (对接 DMA)
+// 返回实际写入 DMA 缓冲区的字节数
+uint16_t Port_WriteData(const uint8_t *data, uint16_t len);
 
-/* ========================================================================== */
-/*                                 通道 B 接口 (预留)                          */
-/* ========================================================================== */
+// 从 DMA 循环缓冲区读取数据
+// 返回实际读取的字节数
+uint16_t Port_ReadData(uint8_t *buf, uint16_t max_len);
 
-// UART 收发
-uint16_t Port_UART_B_Write(const uint8_t *data, uint16_t len);
-uint16_t Port_UART_B_Read(uint8_t *buf, uint16_t max_len);
+// 清空底层接收缓冲区
+void Port_ClearRxBuffer(void);
 
-// GPIO 控制
-void Port_Set_MD0_B(uint8_t level);
-void Port_Set_Reset_B(uint8_t level);
-uint8_t Port_Read_AUX_B(void);
-
-/* ========================================================================== */
-/*                                 系统服务                                    */
-/* ========================================================================== */
-
-void Port_DelayMs(uint32_t ms);
+// 系统时基 (ms)
 uint32_t Port_GetTick(void);
 
-#endif // __LORA_PORT_H
+#endif

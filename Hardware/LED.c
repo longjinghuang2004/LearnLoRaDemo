@@ -26,7 +26,7 @@ void LED_Init(void)
   * 参    数：无
   * 返 回 值：无
   */
-void LED1_ON(void)
+void LED1_OFF(void)
 {
 	GPIO_ResetBits(GPIOA, GPIO_Pin_1);		//设置PA1引脚为低电平
 }
@@ -36,7 +36,7 @@ void LED1_ON(void)
   * 参    数：无
   * 返 回 值：无
   */
-void LED1_OFF(void)
+void LED1_ON(void)
 {
 	GPIO_SetBits(GPIOA, GPIO_Pin_1);		//设置PA1引脚为高电平
 }
