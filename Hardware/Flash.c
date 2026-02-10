@@ -100,3 +100,49 @@ void Flash_WriteModelParams(const RiskModelParameters* params)
         Flash_ProgramWord(remainder_addr, last_word);
     }
 }
+
+/**
+  * @brief  读取 LoRa 配置
+  * @note   [关键] 包含"信道不掉电保存"策略
+  */
+void Flash_ReadLoRaConfig(LoRa_Config_t* cfg)
+{
+    // 1. 从 Flash 拷贝数据
+    memcpy(cfg, (void*)FLASH_LORA_ADDR, sizeof(LoRa_Config_t));
+    
+    // 2. 检查标志位
+    if (cfg->magic != LORA_CFG_MAGIC) {
+        // 无效配置，加载默认值
+        cfg->magic    = LORA_CFG_MAGIC;
+        cfg->token    = DEFAULT_LORA_TOKEN;
+        cfg->addr     = DEFAULT_LORA_ADDR;
+        cfg->power    = (uint8_t)DEFAULT_LORA_POWER;
+        cfg->air_rate = (uint8_t)DEFAULT_LORA_RATE;
+        // 信道默认
+        cfg->channel  = DEFAULT_LORA_CHANNEL;
+    } else {
+        // 3. [策略执行] 即使 Flash 里有数据，也强制将信道重置为默认值
+        //    防止用户改错信道后无法连接，重启即可恢复
+        cfg->channel = DEFAULT_LORA_CHANNEL;
+    }
+}
+
+/**
+  * @brief  写入 LoRa 配置
+  */
+void Flash_WriteLoRaConfig(const LoRa_Config_t* cfg)
+{
+    // 1. 擦除页面
+    Flash_ErasePage(FLASH_LORA_ADDR);
+    
+    // 2. 按字写入
+    uint32_t size_in_words = sizeof(LoRa_Config_t) / 4;
+    if (sizeof(LoRa_Config_t) % 4 != 0) size_in_words++;
+    
+    uint32_t* pData = (uint32_t*)cfg;
+    
+    for (uint32_t i = 0; i < size_in_words; i++) {
+        Flash_ProgramWord(FLASH_LORA_ADDR + i * 4, pData[i]);
+    }
+}
+

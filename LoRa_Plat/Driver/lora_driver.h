@@ -27,4 +27,9 @@ bool Drv_SmartConfig(void);
 // 6. 辅助: 硬件复位
 void Drv_HardReset(void);
 
+
+// [新增] 应用完整配置 (阻塞式，耗时约 1-2秒)
+// 用于 Transaction Commit 阶段
+bool Drv_ApplyConfig(const LoRa_Config_t *cfg);
+
 #endif

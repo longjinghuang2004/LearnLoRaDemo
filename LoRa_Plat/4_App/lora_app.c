@@ -1,88 +1,157 @@
 #include "lora_app.h"
 #include "lora_manager.h"
-#include "Serial.h"
-#include "Delay.h"
-#include "LED.h"
+#include "lora_driver.h" 
+#include "lora_port.h" 
+#include "Flash.h"       
+#include "cJSON.h"
+#include "LED.h"         // [关键] 引入 LED 驱动
 #include <stdio.h>
 #include <string.h>
 
-static volatile bool s_app_busy = false;
-static uint32_t s_last_send_tick = 0;
-static uint8_t  s_toggle_state = 0;
+// --- 全局配置对象 ---
+LoRa_Config_t g_LoRaConfig_Current; 
+LoRa_Config_t g_LoRaConfig_Pending; 
 
+// --- 状态机 ---
+typedef enum {
+    APP_STATE_NORMAL = 0,
+    APP_STATE_CONFIGURING
+} AppState_t;
+
+static AppState_t s_AppState = APP_STATE_NORMAL;
+static uint32_t   s_ConfigTimeoutTick = 0;
+#define CONFIG_TIMEOUT_MS  30000 
+
+// --- 内部函数声明 ---
+static void _App_HandleConfigCommand(cJSON *root);
+static void _App_EnterConfigMode(uint32_t token);
+static void _App_CommitConfig(void);
+static void _App_AbortConfig(void);
+
+// --- 回调函数 ---
 static void _App_OnRxData(uint8_t *data, uint16_t len, uint16_t src_id) {
-    char temp_buf[64];
-    uint16_t copy_len = (len > 63) ? 63 : len;
-    memcpy(temp_buf, data, copy_len);
-    temp_buf[copy_len] = '\0';
+    if (len >= MGR_RX_BUF_SIZE) len = MGR_RX_BUF_SIZE - 1;
+    data[len] = '\0';
     
-    printf("\r\n[APP] Rx from 0x%04X: %s\r\n", src_id, temp_buf);
-    
-#if (LORA_APP_ROLE == 0) // Slave
-    if (strstr(temp_buf, "LED_ON")) {
-        printf("[APP] Action: LED ON\r\n");
-        LED1_ON();
-    } else if (strstr(temp_buf, "LED_OFF")) {
-        printf("[APP] Action: LED OFF\r\n");
-        LED1_OFF();
+    printf("[APP] Rx from 0x%04X: %s\r\n", src_id, data);
+
+    cJSON *root = cJSON_Parse((const char*)data);
+    if (!root) {
+        printf("[APP] JSON Parse Error\r\n");
+        return;
     }
-#endif
+
+    cJSON *item_cmd = cJSON_GetObjectItem(root, "cmd");
+    if (item_cmd && cJSON_IsString(item_cmd)) {
+        char *cmd_str = item_cmd->valuestring;
+
+        if (strncmp(cmd_str, "CFG_", 4) == 0) {
+            _App_HandleConfigCommand(root);
+        } 
+        else if (strcmp(cmd_str, "LED_ON") == 0) {
+            if (s_AppState == APP_STATE_NORMAL) {
+                LED1_ON();  // [修复] 执行动作
+                printf("[APP] Action: LED ON\r\n");
+            }
+        }
+        else if (strcmp(cmd_str, "LED_OFF") == 0) {
+            if (s_AppState == APP_STATE_NORMAL) {
+                LED1_OFF(); // [修复] 执行动作
+                printf("[APP] Action: LED OFF\r\n");
+            }
+        }
+    }
+    cJSON_Delete(root);
 }
 
-static void _App_OnTxResult(bool success) {
-    s_app_busy = false;
-    if (success) {
-        printf("[APP] TX Finished (Success/ACKed)\r\n");
-        LED1_ON(); Delay_ms(50); LED1_OFF();
+static void _App_HandleConfigCommand(cJSON *root) {
+    cJSON *item_cmd = cJSON_GetObjectItem(root, "cmd");
+    char *cmd = item_cmd->valuestring;
+
+    if (strcmp(cmd, "CFG_START") == 0) {
+        cJSON *item_token = cJSON_GetObjectItem(root, "token");
+        if (item_token && cJSON_IsNumber(item_token)) {
+            _App_EnterConfigMode((uint32_t)item_token->valuedouble);
+        } else {
+            printf("[APP] CFG Error: Token missing\r\n");
+        }
+    }
+    else if (strcmp(cmd, "CFG_SET") == 0) {
+        if (s_AppState != APP_STATE_CONFIGURING) return;
+        s_ConfigTimeoutTick = GetTick(); 
+
+        cJSON *item;
+        item = cJSON_GetObjectItem(root, "addr");
+        if (item) g_LoRaConfig_Pending.addr = (uint16_t)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(root, "ch");
+        if (item) g_LoRaConfig_Pending.channel = (uint8_t)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(root, "pwr");
+        if (item) g_LoRaConfig_Pending.power = (uint8_t)item->valuedouble;
+        
+        printf("[APP] Pending Update: Ch=%d, Addr=0x%04X\r\n", 
+               g_LoRaConfig_Pending.channel, g_LoRaConfig_Pending.addr);
+    }
+    else if (strcmp(cmd, "CFG_COMMIT") == 0) {
+        if (s_AppState == APP_STATE_CONFIGURING) {
+            _App_CommitConfig();
+        }
+    }
+    else if (strcmp(cmd, "CFG_ABORT") == 0) {
+        _App_AbortConfig();
+    }
+}
+
+static void _App_EnterConfigMode(uint32_t token) {
+    if (token == g_LoRaConfig_Current.token) {
+        s_AppState = APP_STATE_CONFIGURING;
+        s_ConfigTimeoutTick = GetTick();
+        memcpy(&g_LoRaConfig_Pending, &g_LoRaConfig_Current, sizeof(LoRa_Config_t));
+        printf("[APP] Entered Config Mode.\r\n");
     } else {
-        printf("[APP] TX Failed (Timeout)\r\n");
+        printf("[APP] CFG Denied: Invalid Token\r\n");
     }
 }
 
-static void _App_OnError(LoRaError_t err) {
-    if (err == LORA_ERR_TX_TIMEOUT || err == LORA_ERR_ACK_TIMEOUT) {
-        s_app_busy = false;
-    }
-    printf("[APP] System Error: %d\r\n", err);
+static void _App_CommitConfig(void) {
+    printf("[APP] Committing Config...\r\n");
+    Flash_WriteLoRaConfig(&g_LoRaConfig_Pending);
+    Drv_ApplyConfig(&g_LoRaConfig_Pending);
+    memcpy(&g_LoRaConfig_Current, &g_LoRaConfig_Pending, sizeof(LoRa_Config_t));
+    g_LoRaManager.local_id = g_LoRaConfig_Current.addr;
+    s_AppState = APP_STATE_NORMAL;
+    printf("[APP] Config Committed.\r\n");
 }
 
-void LoRa_App_Init(void) {
-    // 1. 初始化 Manager (此时 ID 是默认值)
-    Manager_Init(_App_OnRxData, _App_OnTxResult, _App_OnError);
+static void _App_AbortConfig(void) {
+    s_AppState = APP_STATE_NORMAL;
+    printf("[APP] Config Aborted.\r\n");
+}
+
+void LoRa_App_Init(uint16_t override_local_id) {
+    Flash_ReadLoRaConfig(&g_LoRaConfig_Current);
     
-    // 2. 强制覆盖 ID
-#if (LORA_APP_ROLE == 1)
-    g_LoRaManager.local_id = 0x0001;
-    printf("[APP] Role: HOST (ID: 0x%04X)\r\n", g_LoRaManager.local_id);
-#else
-    g_LoRaManager.local_id = 0x0002; // 确保从机是 0x0002
-    printf("[APP] Role: SLAVE (ID: 0x%04X)\r\n", g_LoRaManager.local_id);
-#endif
-
-    s_app_busy = false;
-    s_last_send_tick = GetTick();
+    if (override_local_id != 0) {
+        g_LoRaConfig_Current.addr = override_local_id;
+    }
+    
+    printf("[APP] Config Loaded: Addr=0x%04X, Ch=%d\r\n", 
+           g_LoRaConfig_Current.addr, g_LoRaConfig_Current.channel);
+    
+    Manager_Init(_App_OnRxData, NULL, NULL);
+    Drv_ApplyConfig(&g_LoRaConfig_Current);
+    g_LoRaManager.local_id = g_LoRaConfig_Current.addr;
+    Port_ClearRxBuffer();
 }
 
 void LoRa_App_Task(void) {
     Manager_Run();
     
-#if (LORA_APP_ROLE == 1) // Host Logic
-    if (!s_app_busy && (GetTick() - s_last_send_tick > APP_SEND_INTERVAL)) {
-        s_last_send_tick = GetTick();
-        
-        char payload[32];
-        if (s_toggle_state == 0) {
-            sprintf(payload, "{\"cmd\":\"LED_ON\"}");
-            s_toggle_state = 1;
-        } else {
-            sprintf(payload, "{\"cmd\":\"LED_OFF\"}");
-            s_toggle_state = 0;
-        }
-        
-        printf("\r\n[APP] Sending: %s\r\n", payload);
-        if (Manager_SendPacket((uint8_t*)payload, strlen(payload), HOST_TARGET_ID)) {
-            s_app_busy = true;
+    if (s_AppState == APP_STATE_CONFIGURING) {
+        if (GetTick() - s_ConfigTimeoutTick > CONFIG_TIMEOUT_MS) {
+            printf("[APP] Config Timeout. Auto-abort.\r\n");
+            _App_AbortConfig();
         }
     }
-#endif
 }

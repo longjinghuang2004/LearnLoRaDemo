@@ -1,17 +1,15 @@
 #ifndef __LORA_APP_H
 #define __LORA_APP_H
 
-#include "LoRaPlatConfig.h" // 引入配置
-
-// 角色定义 (可以在这里覆盖，或者在 Config.h 里定义)
-// 建议：角色属于业务逻辑，留在 App.h
-#define LORA_APP_ROLE       1 // 0:Slave, 1:Host
+#include "LoRaPlatConfig.h" 
 
 // 目标 ID (业务相关)
-#define HOST_TARGET_ID      0x0002
-#define APP_SEND_INTERVAL   3000
+#define HOST_TARGET_ID      0x0001 // 默认从机ID
 
-void LoRa_App_Init(void);
+// [修改] 初始化函数增加参数
+// override_local_id: 如果不为0，则强制使用此ID，忽略Flash中的配置
+void LoRa_App_Init(uint16_t override_local_id);
+
 void LoRa_App_Task(void);
 
 #endif
