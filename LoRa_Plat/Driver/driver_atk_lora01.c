@@ -139,10 +139,11 @@ bool Drv_SmartConfig(void) {
     return true;
 }
 
+
 // 应用用户配置
 bool Drv_ApplyConfig(const LoRa_Config_t *cfg) {
-    printf("[DRV] Applying: Addr=0x%04X, Ch=%d, Rate=%d, Pwr=%d, Mode=%d\r\n", 
-           cfg->addr, cfg->channel, cfg->air_rate, cfg->power, cfg->tmode);
+    printf("[DRV] Applying: HW_Addr=0x%04X, Ch=%d, Rate=%d, Pwr=%d, Mode=%d\r\n", 
+           cfg->hw_addr, cfg->channel, cfg->air_rate, cfg->power, cfg->tmode);
     
     Drv_SetMode(1);
     Delay_ms(600); 
@@ -150,8 +151,8 @@ bool Drv_ApplyConfig(const LoRa_Config_t *cfg) {
     char cmd[64];
     bool success = true;
 
-    // 1. 设置地址 (支持用户自定义)
-    sprintf(cmd, "AT+ADDR=%02X,%02X\r\n", (cfg->addr >> 8) & 0xFF, cfg->addr & 0xFF);
+    // 1. 设置物理地址 (使用 hw_addr，实现物理层解耦)
+    sprintf(cmd, "AT+ADDR=%02X,%02X\r\n", (cfg->hw_addr >> 8) & 0xFF, cfg->hw_addr & 0xFF);
     if (!_SendAT(cmd, "OK", 500)) success = false;
     Delay_ms(50);
 
@@ -165,7 +166,7 @@ bool Drv_ApplyConfig(const LoRa_Config_t *cfg) {
     if (!_SendAT(cmd, "OK", 500)) success = false;
     Delay_ms(50);
 
-    // 4. 设置传输模式 (透传/定向)
+    // 4. 设置传输模式
     sprintf(cmd, "AT+TMODE=%d\r\n", cfg->tmode);
     if (!_SendAT(cmd, "OK", 500)) success = false;
     Delay_ms(50);

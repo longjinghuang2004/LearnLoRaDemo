@@ -32,16 +32,14 @@ static void Manager_DumpHex(const char* tag, uint8_t* buf, uint16_t len) {
 #endif
 }
 
+// [修改] 初始化函数
 void Manager_Init(OnRxData_t on_rx, OnTxResult_t on_tx, OnError_t on_err)
 {
-    // 1. 初始化底层 (包含 Smart Config)
     LoRa_Core_Init();
-    
-    // 2. 彻底清空底层 DMA 缓冲区
     Port_ClearRxBuffer();
     
-    // 3. 初始化参数
-    g_LoRaManager.local_id = LORA_LOCAL_ID;
+    // 注意：local_id 和 uuid 应该在 Init 之前由 App 层赋值给 g_LoRaManager
+    // 这里不再硬编码 local_id
     
     g_LoRaManager.cb_on_rx = on_rx;
     g_LoRaManager.cb_on_tx = on_tx;
@@ -51,7 +49,8 @@ void Manager_Init(OnRxData_t on_rx, OnTxResult_t on_tx, OnError_t on_err)
     g_LoRaManager.tx_seq = 0;
     g_LoRaManager.rx_len = 0; 
     
-    LOG_DBG("[MGR] Init Done. ID:0x%04X\r\n", g_LoRaManager.local_id);
+    LOG_DBG("[MGR] Init Done. NetID:0x%04X, UUID:0x%08X\r\n", 
+            g_LoRaManager.local_id, g_LoRaManager.uuid);
 }
 
 bool Manager_SendPacket(const uint8_t *payload, uint16_t len, uint16_t target_id)
@@ -208,6 +207,7 @@ static void Manager_ProcessRx(void) {
     uint16_t processed_len = 0;
     
     while (i + 11 <= g_LoRaManager.rx_len) {
+        // 1. 寻找包头
         if (g_LoRaManager.RxBuffer[i] == PROTOCOL_HEAD_0 && 
             g_LoRaManager.RxBuffer[i+1] == PROTOCOL_HEAD_1) {
             
@@ -215,18 +215,38 @@ static void Manager_ProcessRx(void) {
             uint8_t ctrl = g_LoRaManager.RxBuffer[i+3];
             bool has_crc = (ctrl & CTRL_MASK_HAS_CRC) ? true : false;
             
+            // 计算整包长度
             uint16_t packet_len = 2 + 1 + 1 + 1 + 2 + 2 + payload_len + (has_crc ? 2 : 0) + 2;
             
-            if (i + packet_len > g_LoRaManager.rx_len) break; 
+            if (i + packet_len > g_LoRaManager.rx_len) break; // 数据未收全，等待
             
+            // 2. 验证包尾
             if (g_LoRaManager.RxBuffer[i + packet_len - 2] == PROTOCOL_TAIL_0 && 
                 g_LoRaManager.RxBuffer[i + packet_len - 1] == PROTOCOL_TAIL_1) {
                 
+                // 3. 提取地址信息
                 uint16_t target_id = (uint16_t)g_LoRaManager.RxBuffer[i+5] | ((uint16_t)g_LoRaManager.RxBuffer[i+6] << 8);
                 uint16_t src_id    = (uint16_t)g_LoRaManager.RxBuffer[i+7] | ((uint16_t)g_LoRaManager.RxBuffer[i+8] << 8);
                 uint8_t  seq       = g_LoRaManager.RxBuffer[i+4];
                 
-                if (target_id == g_LoRaManager.local_id || target_id == 0xFFFF) {
+                // 4. [核心修改] 身份过滤逻辑
+                bool accept = false;
+
+                // 规则A: 匹配我的逻辑 ID (NetID)
+                if (target_id == g_LoRaManager.local_id) {
+                    accept = true;
+                }
+                // 规则B: 匹配广播 ID (0xFFFF)
+                else if (target_id == LORA_ID_BROADCAST) {
+                    accept = true;
+                }
+                // 规则C: 我是未分配设备(ID=0)，且收到了发给未分配设备(ID=0)的包
+                //        (此时 App 层会进一步解析 Payload 里的 UUID 来确认是不是找我的)
+                else if (g_LoRaManager.local_id == LORA_ID_UNASSIGNED && target_id == LORA_ID_UNASSIGNED) {
+                    accept = true;
+                }
+
+                if (accept) {
                     bool crc_ok = true;
                     if (has_crc) {
                         uint16_t calc_len = 1 + 1 + 1 + 4 + payload_len;
@@ -244,7 +264,6 @@ static void Manager_ProcessRx(void) {
                     if (crc_ok) {
                         // 检查是否是 ACK 包
                         if ((ctrl & CTRL_MASK_TYPE) != 0) {
-                            // 是 ACK 包，检查是否在等待 ACK
                             if (g_LoRaManager.state == MGR_STATE_WAIT_ACK) {
                                 LOG_DBG("[MGR] ACK Recv from 0x%04X\r\n", src_id);
                                 if (g_LoRaManager.cb_on_tx) g_LoRaManager.cb_on_tx(true);
@@ -256,8 +275,8 @@ static void Manager_ProcessRx(void) {
                             if (g_LoRaManager.cb_on_rx) {
                                 g_LoRaManager.cb_on_rx(p_payload, payload_len, src_id);
                             }
-                            // 回复 ACK
-                            if ((ctrl & CTRL_MASK_NEED_ACK) && target_id != 0xFFFF) {
+                            // 回复 ACK (广播包和未分配包通常不回ACK，防止风暴)
+                            if ((ctrl & CTRL_MASK_NEED_ACK) && target_id != LORA_ID_BROADCAST && target_id != LORA_ID_UNASSIGNED) {
                                 Manager_SendACK(src_id, seq);
                             }
                         }

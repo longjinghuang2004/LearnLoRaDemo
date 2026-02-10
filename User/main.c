@@ -4,17 +4,18 @@
 #include "LED.h"
 #include "lora_app.h"
 #include "lora_driver.h" 
+#include "lora_manager.h" 
 #include "Flash.h"
-#include "cJSON.h" // 需要解析 JSON
+#include "cJSON.h" 
 #include <string.h>
 #include <stdio.h>
 
 // ============================================================
 //                    测试角色配置
 // ============================================================
-// 1: 主机 (Host) - ID: 0x0001 (与从机一致，透传互通)
-// 2: 从机 (Slave) - ID: 0x0001
-#define TEST_ROLE       2
+// 1: 主机 (Host) - ID: 0x0001 (连接电脑)
+// 2: 从机 (Slave) - ID: 0x0002 (不接电脑，只接电源)
+#define TEST_ROLE       1  // <--- 确保这里是 1
 
 // ============================================================
 //                    主机本地调试配置
@@ -23,21 +24,24 @@
 
 volatile uint8_t g_TimeoutFlag; 
 
-// 声明外部函数以便本地调用
+// 声明外部函数
 extern void App_FactoryReset(void);
 
-// [新增] 打印当前 LoRa 参数状态
+// 打印当前 LoRa 参数状态
 static void Print_LoRa_Status(void) {
     printf("\r\n=== LoRa Device Status ===\r\n");
-    printf("  Addr (HW/SW):  0x%04X\r\n", g_LoRaConfig_Current.addr);
-    printf("  Channel:       %d (Freq: %d MHz)\r\n", g_LoRaConfig_Current.channel, 410 + g_LoRaConfig_Current.channel);
-    printf("  Power:         %d (0=11dBm, 3=20dBm)\r\n", g_LoRaConfig_Current.power);
-    printf("  Air Rate:      %d\r\n", g_LoRaConfig_Current.air_rate);
-    printf("  Mode (TMODE):  %d (0=Transparent, 1=Fixed)\r\n", g_LoRaConfig_Current.tmode);
+    printf("  UUID:          0x%08X\r\n", g_LoRaConfig_Current.uuid);
+    printf("  NetID (Logic): 0x%04X %s\r\n", g_LoRaConfig_Current.net_id,
+           (g_LoRaConfig_Current.net_id == LORA_ID_UNASSIGNED) ? "(Unassigned)" : "");
+    printf("  HWAddr (Phys): 0x%04X\r\n", g_LoRaConfig_Current.hw_addr);
+    printf("  Channel:       %d\r\n", g_LoRaConfig_Current.channel);
+    printf("  Power:         %d\r\n", g_LoRaConfig_Current.power);
+    printf("  Mode:          %d\r\n", g_LoRaConfig_Current.tmode);
     printf("==========================\r\n");
 }
 
-// [新增] 处理本地配置指令
+// 处理本地配置指令 (仅 Host 使用)
+#if (TEST_ROLE == 1)
 static void Handle_Local_Command(const char *json_str) {
     cJSON *root = cJSON_Parse(json_str);
     if (!root) return;
@@ -46,13 +50,15 @@ static void Handle_Local_Command(const char *json_str) {
     if (cmd_item && strcmp(cmd_item->valuestring, "LOCAL_SET") == 0) {
         printf("[MAIN] Applying Local Config...\r\n");
         
-        // 解析参数并更新全局配置
         cJSON *item;
+        item = cJSON_GetObjectItem(root, "net_id");
+        if (item) g_LoRaConfig_Current.net_id = (uint16_t)item->valuedouble;
+        
+        item = cJSON_GetObjectItem(root, "hw_addr");
+        if (item) g_LoRaConfig_Current.hw_addr = (uint16_t)item->valuedouble;
+
         item = cJSON_GetObjectItem(root, "ch");
         if (item) g_LoRaConfig_Current.channel = (uint8_t)item->valuedouble;
-        
-        item = cJSON_GetObjectItem(root, "addr");
-        if (item) g_LoRaConfig_Current.addr = (uint16_t)item->valuedouble;
         
         item = cJSON_GetObjectItem(root, "pwr");
         if (item) g_LoRaConfig_Current.power = (uint8_t)item->valuedouble;
@@ -60,9 +66,12 @@ static void Handle_Local_Command(const char *json_str) {
         item = cJSON_GetObjectItem(root, "tmode");
         if (item) g_LoRaConfig_Current.tmode = (uint8_t)item->valuedouble;
 
-        // 应用配置到模块
+        Flash_WriteLoRaConfig(&g_LoRaConfig_Current);
+        
+        extern LoRa_Manager_t g_LoRaManager;
+        g_LoRaManager.local_id = g_LoRaConfig_Current.net_id;
+
         if (Drv_ApplyConfig(&g_LoRaConfig_Current)) {
-            // 打印完整信息
             Print_LoRa_Status();
         } else {
             printf("[MAIN] Config Failed!\r\n");
@@ -70,6 +79,7 @@ static void Handle_Local_Command(const char *json_str) {
     }
     cJSON_Delete(root);
 }
+#endif
 
 int main(void)
 {
@@ -77,6 +87,7 @@ int main(void)
     LED_Init();
     Serial_Init();
     
+    // 启动闪烁
     for(int i=0; i<3; i++) { LED1_ON(); Delay_ms(100); LED1_OFF(); Delay_ms(100); }
 
     printf("\r\n=========================================\r\n");
@@ -84,27 +95,27 @@ int main(void)
         printf("      [MODE] HOST (ID: 0x0001)           \r\n");
         uint16_t my_id = 0x0001;
     #else
-        printf("      [MODE] SLAVE (ID: 0x0001)          \r\n");
-        uint16_t my_id = 0x0001;
+        printf("      [MODE] SLAVE (ID: 0x0002)          \r\n");
+        uint16_t my_id = 0x0002;
     #endif
     printf("=========================================\r\n");
 
     // 初始化 LoRa
     LoRa_App_Init(my_id);
-    
-    // [新增] 启动时打印一次状态
     Print_LoRa_Status();
 
-    #if (TEST_ROLE == 1 && HOST_FORCE_CH_10 == 1)
-        printf("[TEST] Host forcing local channel to 10...\r\n");
-        g_LoRaConfig_Current.channel = 10; 
-        Drv_ApplyConfig(&g_LoRaConfig_Current); 
-        extern void Port_ClearRxBuffer(void);
-        Port_ClearRxBuffer();
-        Print_LoRa_Status();
-    #endif
-
     printf("[SYS] Loop Start. Waiting for commands...\r\n");
+    printf("------------------------------------------------\r\n");
+    printf(" Test Commands Guide:\r\n");
+    printf(" 1. CMD0 <json>  -> Send to ID 0 (Unassigned)\r\n");
+    printf("    Ex: CMD0 {\"cmd\":\"LED_ON\"}\r\n");
+    printf(" 2. BIND <uuid> <id> -> Bind UUID to new ID\r\n");
+    printf("    Ex: BIND 3685384454 5\r\n");
+    printf(" 3. CMD5 <json>  -> Send to ID 5\r\n");
+    printf("    Ex: CMD5 {\"cmd\":\"LED_OFF\"}\r\n");
+    printf(" 4. CMD2 <json>  -> Send to ID 2 (Test Filter)\r\n");
+    printf("    Ex: CMD2 {\"cmd\":\"LED_ON\"}\r\n");
+    printf("------------------------------------------------\r\n");
 
     while (1)
     {
@@ -115,38 +126,81 @@ int main(void)
         {
             char *input_str = Serial_RxPacket;
             uint16_t len = strlen(input_str);
+            // 去除回车换行
             while(len > 0 && (input_str[len-1] == '\r' || input_str[len-1] == '\n')) {
                 input_str[--len] = '\0';
             }
 
             if (len > 0)
             {
-                printf("[HOST] PC Input: %s\r\n", input_str);
+                printf("[HOST] Input: %s\r\n", input_str);
+
+                // --- 场景 1: 测试未分配设备 (发给 ID 0) ---
+                if (strncmp(input_str, "CMD0", 4) == 0) {
+                    printf(" -> Sending to ID 0x0000...\r\n");
+                    LED1_ON();
+                    // 跳过前5个字符("CMD0 "), 发送后面的 JSON
+                    Manager_SendPacket((uint8_t*)(input_str + 5), strlen(input_str) - 5, 0x0000);
+                    LED1_OFF();
+                }
                 
-                // [新增] 本地配置指令处理
-                if (strstr(input_str, "LOCAL_SET")) {
+                // --- 场景 2: 执行绑定 (发给 ID 0) ---
+                else if (strncmp(input_str, "BIND", 4) == 0) {
+                    uint32_t u; 
+                    int id;
+                    // 解析 UUID 和 新ID
+                    if (sscanf(input_str + 5, "%u %d", &u, &id) == 2) {
+                        char buf[128];
+                        sprintf(buf, "{\"cmd\":\"CFG_BIND\",\"uuid\":%u,\"new_id\":%d}", u, id);
+                        printf(" -> Binding UUID %u to ID %d...\r\n", u, id);
+                        printf(" -> Payload: %s\r\n", buf);
+                        LED1_ON();
+                        Manager_SendPacket((uint8_t*)buf, strlen(buf), 0x0000);
+                        LED1_OFF();
+                    } else {
+                        printf(" -> BIND Error: Invalid Format. Use: BIND <uuid> <id>\r\n");
+                    }
+                }
+
+                // --- 场景 3: 控制已绑定设备 (发给 ID 5) ---
+                else if (strncmp(input_str, "CMD5", 4) == 0) {
+                    printf(" -> Sending to ID 0x0005...\r\n");
+                    LED1_ON();
+                    Manager_SendPacket((uint8_t*)(input_str + 5), strlen(input_str) - 5, 0x0005);
+                    LED1_OFF();
+                }
+
+                // --- 场景 4: 测试过滤 (发给 ID 2) ---
+                else if (strncmp(input_str, "CMD2", 4) == 0) {
+                    printf(" -> Sending to ID 0x0002...\r\n");
+                    LED1_ON();
+                    Manager_SendPacket((uint8_t*)(input_str + 5), strlen(input_str) - 5, 0x0002);
+                    LED1_OFF();
+                }
+                
+                // --- 本地配置指令 ---
+                else if (strstr(input_str, "LOCAL_SET")) {
                     Handle_Local_Command(input_str);
                 }
-                // 本地救砖指令
-                else if (strcmp(input_str, "LOCAL_RESET") == 0) {
+                else if (strstr(input_str, "LOCAL_RESET")) {
                     App_FactoryReset();
                 }
+                
+                // --- 默认透传 ---
                 else {
-                    // 默认发给从机 (ID: 0x0001)
-                    printf("[HOST] Sending to 0x0001...\r\n");
-                    LED1_ON();
-                    Manager_SendPacket((uint8_t*)input_str, len, 0x0001);
-                    LED1_OFF();
+                    printf(" -> Unknown CMD. Sending raw to ID 0xFFFF (Broadcast)...\r\n");
+                    Manager_SendPacket((uint8_t*)input_str, len, 0xFFFF);
                 }
             }
             Serial_RxFlag = 0;
         }
         #endif
         
+        // Slave 心跳 (仅在 Slave 模式下编译)
         #if (TEST_ROLE == 2)
             static uint32_t last_tick = 0;
             if (GetTick() - last_tick > 2000) {
-                LED1_ON(); Delay_ms(10); LED1_OFF();
+                // LED1_ON(); Delay_ms(10); LED1_OFF(); // 可选心跳
                 last_tick = GetTick();
             }
         #endif

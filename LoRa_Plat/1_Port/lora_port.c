@@ -159,3 +159,66 @@ void DMA1_Channel2_IRQHandler(void) {
         s_TxDmaBusy = false;
     }
 }
+
+
+/**
+  * @brief  获取随机数种子
+  * @note   读取悬空引脚 PA0 (ADC1_IN0) 的底噪
+  */
+uint32_t Port_GetRandomSeed(void)
+{
+    // 1. 开启时钟
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1 | RCC_APB2Periph_GPIOA, ENABLE);
+    
+    // 2. 设置 ADC 分频 (必须 < 14MHz, 72/6 = 12MHz)
+    RCC_ADCCLKConfig(RCC_PCLK2_Div6); 
+
+    // 3. 配置 PA0 为模拟输入
+    GPIO_InitTypeDef GPIO_InitStructure;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    
+    // 4. 配置 ADC
+    ADC_InitTypeDef ADC_InitStructure;
+    ADC_InitStructure.ADC_Mode = ADC_Mode_Independent;
+    ADC_InitStructure.ADC_ScanConvMode = DISABLE;
+    ADC_InitStructure.ADC_ContinuousConvMode = DISABLE;
+    ADC_InitStructure.ADC_ExternalTrigConv = ADC_ExternalTrigConv_None;
+    ADC_InitStructure.ADC_DataAlign = ADC_DataAlign_Right;
+    ADC_InitStructure.ADC_NbrOfChannel = 1;
+    ADC_Init(ADC1, &ADC_InitStructure);
+    
+    ADC_Cmd(ADC1, ENABLE);
+    
+    // 5. 校准
+    ADC_ResetCalibration(ADC1);
+    while(ADC_GetResetCalibrationStatus(ADC1));
+    ADC_StartCalibration(ADC1);
+    while(ADC_GetCalibrationStatus(ADC1));
+    
+    // 6. 采集噪声
+    uint32_t seed = 0;
+    // 采集多次，利用低位的抖动
+    for(int i=0; i<32; i++) {
+        ADC_RegularChannelConfig(ADC1, ADC_Channel_0, 1, ADC_SampleTime_1Cycles5); // 最快采样，捕捉噪声
+        ADC_SoftwareStartConvCmd(ADC1, ENABLE);
+        while(!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC));
+        
+        uint16_t val = ADC_GetConversionValue(ADC1);
+        // 只取最低位 (LSB)，因为它是噪声最大的部分
+        if (val & 0x01) {
+            seed |= (1 << i);
+        }
+        // 极短延时
+        for(volatile int j=0; j<10; j++);
+    }
+    
+    // 7. 关闭 ADC
+    ADC_Cmd(ADC1, DISABLE);
+    
+    // 如果 PA0 接地了导致全是0，混入系统滴答计数作为保底
+    if (seed == 0) seed = GetTick() ^ 0x5A5A5A5A;
+    
+    return seed;
+}

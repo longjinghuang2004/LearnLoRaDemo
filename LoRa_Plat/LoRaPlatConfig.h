@@ -20,7 +20,7 @@ typedef enum {
     LORA_POWER_17dBm, LORA_POWER_20dBm
 } LoRa_Power_t;
 
-// 传输模式 (新增)
+// 传输模式
 typedef enum {
     LORA_TMODE_TRANSPARENT = 0, // 透传模式 (默认)
     LORA_TMODE_FIXED       = 1  // 定向模式
@@ -32,27 +32,36 @@ typedef enum {
 #define DEFAULT_LORA_CHANNEL    23              // 默认信道 23 (433MHz)
 #define DEFAULT_LORA_RATE       LORA_RATE_19K2  // 默认高速
 #define DEFAULT_LORA_POWER      LORA_POWER_11dBm // 默认低功耗
-#define DEFAULT_LORA_ADDR       0x0000          // 默认硬件地址 0
-#define DEFAULT_LORA_TOKEN      123456          // 默认安全令牌
 #define DEFAULT_LORA_TMODE      LORA_TMODE_TRANSPARENT
+#define DEFAULT_LORA_TOKEN      0x00000000      // [修复] 默认安全令牌
 
-// 软件ID默认值 (App层可覆盖)
-#define LORA_LOCAL_ID           0x0001          
+// 特殊 ID 定义
+#define LORA_ID_UNASSIGNED      0x0000          // 未分配 ID (新设备默认)
+#define LORA_ID_BROADCAST       0xFFFF          // 广播 ID
+#define LORA_HW_ADDR_DEFAULT    0x0000          // 默认物理地址 (全通)
 
 // ============================================================
 //                    3. 配置结构体
 // ============================================================
-#define LORA_CFG_MAGIC          0x5B            // [修改] Magic变更为0x5B以强制刷新旧Flash
+// [修改] Magic变更为0x5C以强制刷新旧Flash结构
+#define LORA_CFG_MAGIC          0x5C            
 
 typedef struct {
     uint8_t  magic;             // 有效标志
-    uint32_t token;             // 安全令牌
-    uint16_t addr;              // 硬件地址 (兼软件ID)
+    
+    // --- 身份识别 (Identity) ---
+    uint32_t uuid;              // 32位唯一标识 (随机生成，终身不变)
+    uint16_t net_id;            // [重命名] 原addr，逻辑ID (用于业务通信)
+    uint32_t token;             // 安全令牌 (可选)
+    
+    // --- 硬件参数 (Physical) ---
+    uint16_t hw_addr;           // 物理地址 (写入模块AT+ADDR，通常为0)
     uint8_t  channel;           // 信道 (0-31)
     uint8_t  power;             // 功率 (0-3)
     uint8_t  air_rate;          // 空速 (0-5)
-    uint8_t  tmode;             // [新增] 传输模式 (0=透传, 1=定向)
-    uint8_t  padding;           // 对齐
+    uint8_t  tmode;             // 传输模式 (0=透传, 1=定向)
+    
+    uint8_t  padding[3];        // 对齐保留
 } LoRa_Config_t;
 
 // ============================================================

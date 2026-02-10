@@ -101,6 +101,8 @@ void Flash_WriteModelParams(const RiskModelParameters* params)
     }
 }
 
+
+
 /**
   * @brief  读取 LoRa 配置
   */
@@ -111,17 +113,25 @@ void Flash_ReadLoRaConfig(LoRa_Config_t* cfg)
     
     // 2. 检查标志位
     if (cfg->magic != LORA_CFG_MAGIC) {
-        // 无效配置，加载默认值
-        cfg->magic    = LORA_CFG_MAGIC;
+        // Flash 为空或数据损坏
+        // 我们只填充默认参数，但【关键】不要把 magic 设为有效
+        // 让上层 App 决定何时初始化并写入有效标志
+        
+        memset(cfg, 0, sizeof(LoRa_Config_t)); // 清零
+        
+        cfg->magic    = 0x00; // 显式标记为无效
         cfg->token    = DEFAULT_LORA_TOKEN;
-        cfg->addr     = DEFAULT_LORA_ADDR;
+        cfg->net_id   = LORA_ID_UNASSIGNED;
+        cfg->hw_addr  = LORA_HW_ADDR_DEFAULT;
         cfg->power    = (uint8_t)DEFAULT_LORA_POWER;
         cfg->air_rate = (uint8_t)DEFAULT_LORA_RATE;
         cfg->channel  = DEFAULT_LORA_CHANNEL;
         cfg->tmode    = (uint8_t)DEFAULT_LORA_TMODE;
+        cfg->uuid     = 0; 
     } 
-    // [修改] 不再强制重置信道，完全信任 Flash 中的值
 }
+
+
 
 /**
   * @brief  写入 LoRa 配置

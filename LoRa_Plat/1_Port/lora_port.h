@@ -31,4 +31,6 @@ void Port_ClearRxBuffer(void);
 // 系统时基 (ms)
 uint32_t Port_GetTick(void);
 
+uint32_t Port_GetRandomSeed(void);
+
 #endif

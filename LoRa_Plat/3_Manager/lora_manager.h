@@ -53,9 +53,9 @@ typedef struct {
     uint8_t    retry_cnt;
     uint16_t   rx_len;
     
-    // 配置项直接从 Config.h 获取，不再需要 Config 结构体
-    // 但为了支持运行时修改 ID，保留 local_id
-    uint16_t   local_id; 
+    // [修改] 身份信息
+    uint16_t   local_id;    // 当前逻辑 ID (NetID)
+    uint32_t   uuid;        // [新增] 唯一标识 (用于未分配时的寻址)
     
     OnRxData_t      cb_on_rx;
     OnTxResult_t    cb_on_tx;
