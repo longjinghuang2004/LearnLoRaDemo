@@ -4,22 +4,20 @@
 #include "LED.h"
 #include "Flash.h"
 #include "lora_service.h" 
-#include "cJSON.h" 
 #include <string.h>
 #include <stdio.h>
-
-// ============================================================================
-// [测试角色配置] - 编译前请修改此处
-// ============================================================================
-// 1 = 主机 (HOST): 连接PC串口助手，用于发送指令，解析串口输入
-// 2 = 从机 (NODE): 独立运行，响应指令，定期发送心跳
-// ============================================================================
-#define TEST_ROLE      1  
 
 volatile uint8_t g_TimeoutFlag;
 
 // ============================================================================
-// 1. 接口适配 (Adapter Layer)
+// [测试角色配置]
+// 1 = 主机 (HOST): ID=1, 发送指令
+// 2 = 从机 (NODE): ID=2, 响应指令
+// ============================================================================
+#define TEST_ROLE      2  
+
+// ============================================================================
+// 1. 接口适配
 // ============================================================================
 
 void Adapter_SaveConfig(const LoRa_Config_t *cfg) {
@@ -45,41 +43,45 @@ void Adapter_SystemReset(void) {
     NVIC_SystemReset();
 }
 
-// 收到数据时的回调
+// [业务钩子] 收到非平台指令的数据时调用
 void Adapter_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len) {
-    // 打印接收到的原始数据
-    printf("[APP] RX from ID:0x%04X | Len:%d | Payload: %s\r\n", src_id, len, data);
+    // 此时 data 已经是纯净的业务数据，不含 CMD: 前缀
     
-    // LED 动作指示
-    LED1_ON(); 
-    Delay_ms(50); 
-    LED1_OFF();
-
-    // 简单的业务指令解析
+    // 场景1：文本指令解析
     if (strstr((const char*)data, "LED_ON")) {
-        LED2_ON(); // 假设板子上有LED2，或者复用LED1长亮
-        printf("    -> Action: LED ON\r\n");
+        LED1_ON(); 
+        printf("    [Action] LED ON\r\n");
     }
     else if (strstr((const char*)data, "LED_OFF")) {
-        LED2_OFF();
-        printf("    -> Action: LED OFF\r\n");
+        LED1_OFF();
+        printf("    [Action] LED OFF\r\n");
     }
+    
+    // 场景2：二进制解析示例 (假设协议: 0xA5 <Cmd> <Val>)
+    // if (len >= 3 && data[0] == 0xA5) {
+    //     uint8_t cmd = data[1];
+    //     uint8_t val = data[2];
+    //     printf("    [Binary] Cmd:0x%02X Val:0x%02X\r\n", cmd, val);
+    // }
 }
 
-// LoRa 事件回调
+// LoRa 事件回调 (用于日志)
 void Adapter_OnEvent(LoRa_Event_t event, void *arg) {
     switch(event) {
         case LORA_EVENT_INIT_SUCCESS:
-            printf("[EVT] Init OK. UUID:0x%08X, NetID:0x%04X\r\n", 
+            printf("[EVT] Init OK. UUID:0x%08X, NetID:%d\r\n", 
                    g_LoRaConfig_Current.uuid, g_LoRaConfig_Current.net_id);
+            break;
+        case LORA_EVENT_MSG_RECEIVED:
+            // 这里打印所有收到的原始数据 (包括 CMD: 指令)
+            printf("[EVT] RX Raw: %s\r\n", (char*)arg);
+            LED1_Turn(); // 闪灯指示接收
             break;
         case LORA_EVENT_BIND_SUCCESS:
             printf("[EVT] BIND OK! New NetID: %d\r\n", *(uint16_t*)arg);
-            // 绑定成功后闪烁提示
-            for(int i=0; i<5; i++) { LED1_Turn(); Delay_ms(100); }
             break;
-        case LORA_EVENT_MSG_RECEIVED:
-            // 收到物理层包时的瞬间闪烁（调试用）
+        case LORA_EVENT_CONFIG_COMMIT:
+            printf("[EVT] Config Updated.\r\n");
             break;
         default: break;
     }
@@ -97,17 +99,45 @@ const LoRa_Callback_t my_callbacks = {
 
 // ============================================================================
 // 2. 辅助函数
-// ============================================================================
+// ============================================================
+
+// [强制初始化] 确保测试环境 ID 正确
+void Force_Init_Config(void) {
+    LoRa_Config_t cfg;
+    Flash_ReadLoRaConfig(&cfg);
+    
+    uint16_t target_id = (TEST_ROLE == 1) ? 1 : 2;
+    
+    // 如果当前 Flash 里的 ID 不是目标 ID，或者 Magic 不对，强制重写
+    if (cfg.net_id != target_id || cfg.magic != LORA_CFG_MAGIC) {
+        printf("[TEST] Forcing NetID to %d...\r\n", target_id);
+        
+        // 构造默认配置
+        memset(&cfg, 0, sizeof(LoRa_Config_t));
+        cfg.magic = LORA_CFG_MAGIC;
+        cfg.net_id = target_id;
+        cfg.uuid = (TEST_ROLE == 1) ? 0xAAAA1111 : 0xBBBB2222; // 固定UUID方便测试
+        cfg.hw_addr = LORA_HW_ADDR_DEFAULT;
+        cfg.channel = DEFAULT_LORA_CHANNEL;
+        cfg.power = DEFAULT_LORA_POWER;
+        cfg.air_rate = DEFAULT_LORA_RATE;
+        cfg.tmode = DEFAULT_LORA_TMODE;
+        
+        Flash_WriteLoRaConfig(&cfg);
+        printf("[TEST] Force Init Done. Rebooting...\r\n");
+        Delay_ms(100);
+        NVIC_SystemReset();
+    }
+}
 
 void Show_Help(void) {
-    printf("\r\n=== LoRa Command Help ===\r\n");
-    printf("1. CMD0 <msg>       : Send to ID 0 (Unassigned)\r\n");
-    printf("2. CMD <id> <msg>   : Send to specific ID (e.g., CMD 5 HELLO)\r\n");
-    printf("3. BROADCAST <msg>  : Send to All (ID 0xFFFF)\r\n");
-    printf("4. BIND <uuid> <id> : Bind device with UUID to new ID\r\n");
-    printf("5. HELP             : Show this menu\r\n");
-    printf("   (Any other text) : Default broadcast\r\n");
-    printf("=========================\r\n");
+    printf("\r\n=== LoRaPlat V2.1 (No-JSON) ===\r\n");
+    printf("Role: %s (ID=%d)\r\n", (TEST_ROLE==1)?"HOST":"SLAVE", (TEST_ROLE==1)?1:2);
+    printf("1. CMD0 <msg>       : Send to ID 0\r\n");
+    printf("2. CMD <id> <msg>   : Send to ID (e.g., CMD 2 LED_ON)\r\n");
+    printf("3. BIND <uuid> <id> : Send CMD:BIND=<uuid>,<id>\r\n");
+    printf("4. RST <id>         : Send CMD:RST to ID\r\n");
+    printf("===============================\r\n");
 }
 
 // ============================================================================
@@ -116,15 +146,14 @@ void Show_Help(void) {
 
 int main(void)
 {
-    // 基础硬件初始化
     SysTick_Init();
     LED_Init();
     Serial_Init();
     
-    printf("\r\n=== LoRaPlat v2.0 Test Mode: %s ===\r\n", (TEST_ROLE==1)?"HOST":"NODE");
+    // 1. 强制初始化配置 (测试用)
+    Force_Init_Config();
 
-    // LoRa 服务初始化
-    // 传入 0 表示优先使用 Flash 中存储的 ID
+    // 2. 初始化服务 (传入0，使用Flash中的配置)
     LoRa_Service_Init(&my_callbacks, 0); 
 
 #if (TEST_ROLE == 1)
@@ -133,92 +162,53 @@ int main(void)
 
     while (1)
     {
-        // [核心] 驱动服务层状态机
         LoRa_Service_Run();
 
-        // --------------------------------------------------------------------
-        // Role 1: 主机模式 (处理串口输入 -> 发送 LoRa)
-        // --------------------------------------------------------------------
-#if (TEST_ROLE == 1)
+#if (TEST_ROLE == 1) // 主机逻辑
         if (Serial_RxFlag == 1)
         {
-            char *cmd_buf = Serial_RxPacket;
-            // 清理末尾换行符
-            int len = strlen(cmd_buf);
-            while(len > 0 && (cmd_buf[len-1] == '\r' || cmd_buf[len-1] == '\n')) {
-                cmd_buf[--len] = '\0';
-            }
+            char *input = Serial_RxPacket;
+            // 去除换行
+            int len = strlen(input);
+            while(len > 0 && (input[len-1] == '\r' || input[len-1] == '\n')) input[--len] = '\0';
 
             if (len > 0) {
-                printf("龙 Input: %s\r\n", cmd_buf);
+                printf("PC Input: %s\r\n", input);
 
-                // --- 指令 1: 帮助 ---
-                if (strcasecmp(cmd_buf, "HELP") == 0) {
-                    Show_Help();
-                }
-                // --- 指令 2: 发给 ID 0 (默认未配置设备) ---
-                else if (strncmp(cmd_buf, "CMD0 ", 5) == 0) {
-                    printf(" -> Sending to ID 0x0000...\r\n");
-                    LoRa_Service_Send((uint8_t*)(cmd_buf + 5), strlen(cmd_buf) - 5, 0x0000);
-                }
-                // --- 指令 3: 发给任意 ID ---
-                else if (strncmp(cmd_buf, "CMD ", 4) == 0) {
+                // --- 发送业务指令 ---
+                if (strncmp(input, "CMD ", 4) == 0) {
                     int target_id;
                     char msg[64];
-                    if (sscanf(cmd_buf + 4, "%d %[^\n]", &target_id, msg) == 2) {
-                        printf(" -> Sending to ID %d: %s\r\n", target_id, msg);
-                        LoRa_Service_Send((uint8_t*)msg, strlen(msg), (uint16_t)target_id);
-                    } else {
-                        printf(" -> Error: Format is CMD <id> <msg>\r\n");
+                    if (sscanf(input + 4, "%d %[^\n]", &target_id, msg) == 2) {
+                        printf(" -> Send to %d: %s\r\n", target_id, msg);
+                        LoRa_Service_Send((uint8_t*)msg, strlen(msg), target_id);
                     }
                 }
-                // --- 指令 4: 广播 ---
-                else if (strncmp(cmd_buf, "BROADCAST ", 10) == 0) {
-                    printf(" -> Broadcasting...\r\n");
-                    LoRa_Service_Send((uint8_t*)(cmd_buf + 10), strlen(cmd_buf) - 10, 0xFFFF);
-                }
-                // --- 指令 5: 绑定操作 ---
-                else if (strncmp(cmd_buf, "BIND ", 5) == 0) {
+                // --- 发送平台指令: BIND ---
+                else if (strncmp(input, "BIND ", 5) == 0) {
                     uint32_t u;
                     int id;
-                    if (sscanf(cmd_buf + 5, "%u %d", &u, &id) == 2) {
-                        char json[128];
-                        // 构造 CFG_BIND 指令
-                        sprintf(json, "{\"cmd\":\"CFG_BIND\",\"uuid\":%u,\"new_id\":%d}", u, id);
-                        printf(" -> Sending Bind Request: %s\r\n", json);
-                        // 绑定指令通常发给 ID 0 (未分配) 或 广播
-                        LoRa_Service_Send((uint8_t*)json, strlen(json), 0x0000);
-                    } else {
-                        printf(" -> Error: Format is BIND <uuid> <new_id>\r\n");
+                    if (sscanf(input + 5, "%u %d", &u, &id) == 2) {
+                        char cmd[64];
+                        sprintf(cmd, "CMD:BIND=%u,%d", u, id);
+                        printf(" -> Send Platform Cmd: %s\r\n", cmd);
+                        LoRa_Service_Send((uint8_t*)cmd, strlen(cmd), 0); // 发给ID 0
                     }
                 }
-                // --- 默认: 广播透传 ---
-                else {
-                    printf(" -> Raw Broadcast (ID 0xFFFF)...\r\n");
-                    LoRa_Service_Send((uint8_t*)cmd_buf, len, 0xFFFF);
+                // --- 发送平台指令: RST ---
+                else if (strncmp(input, "RST ", 4) == 0) {
+                    int target_id;
+                    if (sscanf(input + 4, "%d", &target_id) == 1) {
+                        char *cmd = "CMD:RST";
+                        printf(" -> Send RST to %d\r\n", target_id);
+                        LoRa_Service_Send((uint8_t*)cmd, strlen(cmd), target_id);
+                    }
+                }
+                else if (strcasecmp(input, "HELP") == 0) {
+                    Show_Help();
                 }
             }
-            // 清除接收标志，准备下一次接收
             Serial_RxFlag = 0; 
-        }
-#endif
-
-        // --------------------------------------------------------------------
-        // Role 2: 从机模式 (定期发送心跳)
-        // --------------------------------------------------------------------
-#if (TEST_ROLE == 2)
-        static uint32_t last_heartbeat = 0;
-        if (GetTick() - last_heartbeat > 3000) { // 每3秒一次
-            last_heartbeat = GetTick();
-            
-            char beat_msg[32];
-            sprintf(beat_msg, "Heartbeat from 0x%04X", g_LoRaConfig_Current.net_id);
-            
-            // 发给主机 (假设主机 ID 为 1，或者广播)
-            // 这里演示发给广播，方便主机看到
-            LoRa_Service_Send((uint8_t*)beat_msg, strlen(beat_msg), 0xFFFF);
-            
-            LED1_Turn(); // 闪灯指示活着
         }
 #endif
     }
