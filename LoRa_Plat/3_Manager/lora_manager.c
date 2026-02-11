@@ -240,8 +240,12 @@ static void Manager_ProcessRx(void) {
                 else if (target_id == LORA_ID_BROADCAST) {
                     accept = true;
                 }
-                // 规则C: 我是未分配设备(ID=0)，且收到了发给未分配设备(ID=0)的包
-                //        (此时 App 层会进一步解析 Payload 里的 UUID 来确认是不是找我的)
+                // 规则C: 匹配组 ID (新增)
+                // 只有当 group_id 不为 0 时才生效
+                else if (g_LoRaManager.group_id != 0 && target_id == g_LoRaManager.group_id) {
+                    accept = true;
+                }
+                // 规则D: 我是未分配设备(ID=0)，且收到了发给未分配设备(ID=0)的包
                 else if (g_LoRaManager.local_id == LORA_ID_UNASSIGNED && target_id == LORA_ID_UNASSIGNED) {
                     accept = true;
                 }

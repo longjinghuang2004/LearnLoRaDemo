@@ -42,7 +42,6 @@ typedef void (*OnRxData_t)(uint8_t *data, uint16_t len, uint16_t src_id);
 typedef void (*OnTxResult_t)(bool success);
 typedef void (*OnError_t)(LoRaError_t err);
 
-// Manager 核心对象
 typedef struct {
     uint8_t TxBuffer[MGR_TX_BUF_SIZE];
     uint8_t RxBuffer[MGR_RX_BUF_SIZE];
@@ -55,7 +54,8 @@ typedef struct {
     
     // [修改] 身份信息
     uint16_t   local_id;    // 当前逻辑 ID (NetID)
-    uint32_t   uuid;        // [新增] 唯一标识 (用于未分配时的寻址)
+    uint16_t   group_id;    // [新增] 组 ID
+    uint32_t   uuid;        // 唯一标识
     
     OnRxData_t      cb_on_rx;
     OnTxResult_t    cb_on_tx;

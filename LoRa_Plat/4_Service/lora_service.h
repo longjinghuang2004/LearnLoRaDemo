@@ -6,16 +6,25 @@
 #include <stdbool.h>
 
 // ============================================================
-//                    1. 事件定义
+//                    1. 数据结构定义
 // ============================================================
+
+// 接收元数据 (为未来组网预留)
+typedef struct {
+    int16_t rssi; // 接收信号强度 (dBm), -128表示无效
+    int8_t  snr;  // 信噪比 (dB), 0表示无效
+} LoRa_RxMeta_t;
+
+// 事件定义
 typedef enum {
     LORA_EVENT_INIT_SUCCESS = 0,
     LORA_EVENT_BIND_SUCCESS,    // 绑定新ID成功
+    LORA_EVENT_GROUP_UPDATE,    // [新增] 组ID更新
     LORA_EVENT_CONFIG_START,    // 进入配置模式
     LORA_EVENT_CONFIG_COMMIT,   // 配置提交
     LORA_EVENT_FACTORY_RESET,   // 恢复出厂
-    LORA_EVENT_REBOOT_REQ,      // 请求重启 (例如绑定后)
-    LORA_EVENT_MSG_RECEIVED,    // 收到任意消息 (用于日志/UI指示)
+    LORA_EVENT_REBOOT_REQ,      // 请求重启
+    LORA_EVENT_MSG_RECEIVED,    // 收到任意消息
     LORA_EVENT_MSG_SENT         // 发送完成
 } LoRa_Event_t;
 
@@ -33,9 +42,10 @@ typedef struct {
     void (*SystemReset)(void);
     
     // --- 业务接口 (可选) ---
-    // 收到非平台指令的业务数据时调用
-    void (*OnRecvData)(uint16_t src_id, const uint8_t *data, uint16_t len);
-    // 系统事件通知 (用于LED指示、日志打印等)
+    // [修改] 增加 meta 参数
+    void (*OnRecvData)(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta);
+    
+    // 系统事件通知
     void (*OnEvent)(LoRa_Event_t event, void *arg);
     
 } LoRa_Callback_t;
@@ -48,23 +58,21 @@ extern LoRa_Config_t g_LoRaConfig_Current;
 
 /**
   * @brief  初始化 LoRa 服务层
-  * @param  callbacks: 外部实现的接口结构体指针
-  * @param  override_net_id: 强制覆盖 NetID (调试用，0表示不覆盖)
   */
 void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_id);
 
 /**
-  * @brief  服务层主循环 (需在 main loop 中调用)
+  * @brief  服务层主循环
   */
 void LoRa_Service_Run(void);
 
 /**
-  * @brief  发送数据 (封装 Manager 接口)
+  * @brief  发送数据
   */
 bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id);
 
 /**
-  * @brief  执行工厂重置 (清除配置并恢复模块)
+  * @brief  执行工厂重置
   */
 void LoRa_Service_FactoryReset(void);
 

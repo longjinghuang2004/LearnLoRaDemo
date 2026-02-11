@@ -33,25 +33,27 @@ typedef enum {
 #define DEFAULT_LORA_RATE       LORA_RATE_19K2  // 默认高速
 #define DEFAULT_LORA_POWER      LORA_POWER_11dBm // 默认低功耗
 #define DEFAULT_LORA_TMODE      LORA_TMODE_TRANSPARENT
-#define DEFAULT_LORA_TOKEN      0x00000000      // [修复] 默认安全令牌
+#define DEFAULT_LORA_TOKEN      0x00000000      // 默认安全令牌
 
 // 特殊 ID 定义
 #define LORA_ID_UNASSIGNED      0x0000          // 未分配 ID (新设备默认)
 #define LORA_ID_BROADCAST       0xFFFF          // 广播 ID
 #define LORA_HW_ADDR_DEFAULT    0x0000          // 默认物理地址 (全通)
+#define LORA_GROUP_ID_DEFAULT   0x0000          // 默认组 ID (0表示无分组或默认组)
 
 // ============================================================
 //                    3. 配置结构体
 // ============================================================
-// [修改] Magic变更为0x5C以强制刷新旧Flash结构
-#define LORA_CFG_MAGIC          0x5C            
+// [修改] Magic变更为0x5D以强制刷新旧Flash结构 (V2.2 Update)
+#define LORA_CFG_MAGIC          0x5D            
 
 typedef struct {
     uint8_t  magic;             // 有效标志
     
     // --- 身份识别 (Identity) ---
     uint32_t uuid;              // 32位唯一标识 (随机生成，终身不变)
-    uint16_t net_id;            // [重命名] 原addr，逻辑ID (用于业务通信)
+    uint16_t net_id;            // 逻辑 ID (用于业务通信)
+    uint16_t group_id;          // [新增] 组 ID (用于组播/逻辑分组)
     uint32_t token;             // 安全令牌 (可选)
     
     // --- 硬件参数 (Physical) ---
@@ -61,7 +63,7 @@ typedef struct {
     uint8_t  air_rate;          // 空速 (0-5)
     uint8_t  tmode;             // 传输模式 (0=透传, 1=定向)
     
-    uint8_t  padding[3];        // 对齐保留
+    uint8_t  padding[1];        // 对齐保留 (调整padding以保持4字节对齐)
 } LoRa_Config_t;
 
 // ============================================================
@@ -69,7 +71,7 @@ typedef struct {
 // ============================================================
 #define LORA_ENABLE_ACK         true
 #define LORA_ENABLE_CRC         true
-#define LORA_DEBUG_PRINT        0
+#define LORA_DEBUG_PRINT        1  // 默认开启调试日志
 
 #define LORA_ACK_DELAY_MS       100
 #define LORA_TX_TIMEOUT_MS      1000
