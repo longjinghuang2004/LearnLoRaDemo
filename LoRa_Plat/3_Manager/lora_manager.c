@@ -1,8 +1,23 @@
+#include "mod_lora.h"      // 先包含，让编译器先看到函数声明
 #include "lora_manager.h"
-#include "mod_lora.h"
 #include "lora_port.h"
 #include "Delay.h"
 #include <string.h>
+
+// 协议头内容 (固定部分)
+#define PROTOCOL_HEAD_SIZE    2  // 'C', 'M'
+
+// 协议字段相对于"协议头起始"的偏移量
+// (协议头起始 = 定向头之后)
+#define OFFSET_PROTOCOL_LEN       0  // Len: 1 byte
+#define OFFSET_PROTOCOL_CTRL      1  // Ctrl: 1 byte
+#define OFFSET_PROTOCOL_SEQ       2  // Seq: 1 byte
+#define OFFSET_PROTOCOL_TARGET    3  // Target ID: 2 bytes
+#define OFFSET_PROTOCOL_SRC       5  // Source ID: 2 bytes
+#define OFFSET_PROTOCOL_PAYLOAD   7  // Payload starts here
+#define PROTOCOL_HEADER_OVERHEAD  9  // Len(1) + Ctrl(1) + Seq(1) + Target(2) + Src(2)
+
+
 
 #if LORA_DEBUG_PRINT
     #include "Serial.h"
