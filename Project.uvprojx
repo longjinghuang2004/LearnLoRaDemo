@@ -339,7 +339,7 @@
               <MiscControls>--no-multibyte-chars</MiscControls>
               <Define>USE_STDPERIPH_DRIVER</Define>
               <Undefine></Undefine>
-              <IncludePath>.\Start;.\Library;.\User;.\System;.\Hardware;.\function;.\Model;.\LoRa_Plat;.\LoRa_Plat\Layer1_Test;.\LoRa_Plat\Layer2_Module;.\LoRa_Plat\Layer3_Driver;.\LoRa_Plat\1_Port;.\LoRa_Plat\2_Core;.\LoRa_Plat\3_Manager;.\LoRa_Plat\4_App;.\LoRa_Plat\Driver</IncludePath>
+              <IncludePath>.\Start;.\Library;.\User;.\System;.\Hardware;.\function;.\Model;.\LoRa_Plat;.\LoRa_Plat\Layer1_Test;.\LoRa_Plat\Layer2_Module;.\LoRa_Plat\Layer3_Driver;.\LoRa_Plat\1_Port;.\LoRa_Plat\2_Core;.\LoRa_Plat\3_Manager;.\LoRa_Plat\4_App;.\LoRa_Plat\Driver;.\LoRa_Plat\4_Service</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -849,16 +849,6 @@
               <FilePath>.\LoRa_Plat\3_Manager\lora_manager.h</FilePath>
             </File>
             <File>
-              <FileName>lora_app.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\LoRa_Plat\4_App\lora_app.c</FilePath>
-            </File>
-            <File>
-              <FileName>lora_app.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\LoRa_Plat\4_App\lora_app.h</FilePath>
-            </File>
-            <File>
               <FileName>mod_lora.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\LoRa_Plat\2_Core\mod_lora.c</FilePath>
@@ -877,6 +867,16 @@
               <FileName>lora_driver.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\LoRa_Plat\Driver\lora_driver.h</FilePath>
+            </File>
+            <File>
+              <FileName>lora_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\4_Service\lora_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_service.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\4_Service\lora_service.h</FilePath>
             </File>
           </Files>
         </Group>
