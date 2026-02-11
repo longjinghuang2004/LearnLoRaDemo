@@ -67,15 +67,66 @@ typedef struct {
 } LoRa_Config_t;
 
 // ============================================================
-//                    4. 系统参数
+//                    4. 系统参数配置 (System Parameters)
 // ============================================================
-#define LORA_ENABLE_ACK         true
-#define LORA_ENABLE_CRC         true
-#define LORA_DEBUG_PRINT        1  // 默认开启调试日志
 
+/**
+ * @brief ACK 确认机制开关
+ * @note  true:  开启。发送数据时，如果设置了需要ACK，协议栈会等待接收方的确认包。
+ *               如果超时未收到，会自动触发重传。适合对可靠性要求高的场景（如报警、控制指令）。
+ *        false: 关闭。发送即忘（Fire and Forget）。适合对实时性要求高、允许少量丢包
+ *               或通过上层业务逻辑保证可靠性的场景（如高频传感器数据上报）。
+ */
+#define LORA_ENABLE_ACK         true
+
+/**
+ * @brief CRC16 数据校验开关
+ * @note  true:  开启。协议栈会在数据包尾部附加2字节的CRC校验码。接收方会计算校验码，
+ *               如果不匹配则直接丢弃该包，防止因无线干扰导致的乱码数据进入业务层。
+ *        false: 关闭。节省2字节开销，但应用层可能收到错误的数据。
+ */
+#define LORA_ENABLE_CRC         true
+
+/**
+ * @brief 调试日志开关
+ * @note  1: 开启。通过 printf 输出协议栈的运行状态（如 TX/RX Hex数据、状态机变迁、错误信息）。
+ *           注意：大量打印可能会影响高频通信的时序，正式量产建议关闭。
+ *        0: 关闭。静默运行，节省 CPU 时间和串口带宽。
+ */
+#define LORA_DEBUG_PRINT        1 
+
+/**
+ * @brief ACK 回复延时 (单位: ms)
+ * @note  从机在收到数据后，不会立即回复 ACK，而是等待这段时间再发。
+ *        原因：LoRa 模块是半双工的，主机发送完数据后，需要几十毫秒的时间从 TX 模式
+ *        切换回 RX 模式。如果从机回复太快，主机还没准备好接收，ACK 就会丢失。
+ *        建议值：50~200ms。
+ */
 #define LORA_ACK_DELAY_MS       100
+
+/**
+ * @brief 发送超时时间 (单位: ms)
+ * @note  指数据写入串口并启动 DMA 发送后，等待“发送完成”信号的最长时间。
+ *        如果超过这个时间模块还没发完（比如模块死机或 AUX 信号异常），
+ *        协议栈会判定发送失败并复位状态机，防止程序卡死。
+ */
 #define LORA_TX_TIMEOUT_MS      1000
+
+/**
+ * @brief 等待 ACK 超时时间 (单位: ms)
+ * @note  主机发送数据后，等待从机回复 ACK 的最长耐心时间。
+ *        这个时间必须大于 (空中传输时间 + LORA_ACK_DELAY_MS + 从机处理时间)。
+ *        如果超时未收到 ACK，协议栈会触发重传逻辑。
+ */
 #define LORA_ACK_TIMEOUT_MS     2000
+
+/**
+ * @brief 最大重传次数
+ * @note  当等待 ACK 超时后，协议栈会自动重试发送的次数。
+ *        例如设置为 3，则总共最多尝试发送 1(初次) + 3(重试) = 4 次。
+ *        如果重传这么多次依然失败，回调函数会报告 LORA_ERR_ACK_TIMEOUT 错误。
+ */
 #define LORA_MAX_RETRY          3
+
 
 #endif // __LORA_PLAT_CONFIG_H
