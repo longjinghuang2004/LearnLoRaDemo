@@ -1,159 +1,171 @@
+/**
+  ******************************************************************************
+  * @file    lora_service.c
+  * @author  LoRaPlat Team
+  * @brief   Layer 4: 业务服务层实现
+  ******************************************************************************
+  */
+
 #include "lora_service.h"
 #include "lora_manager.h"
-#include "lora_driver.h" 
-#include "lora_port.h" 
+#include "lora_driver.h"
 #include <string.h>
 #include <stdlib.h>
-#include <stdio.h>
+#include <stdio.h> // sscanf
 
-LoRa_Config_t g_LoRaConfig_Current; 
-static LoRa_Config_t g_LoRaConfig_Pending; 
-static LoRa_Callback_t g_cb; 
+// ============================================================
+//                    1. 内部变量
+// ============================================================
 
-typedef enum { SVC_STATE_NORMAL = 0, SVC_STATE_CONFIGURING } SvcState_t;
-static SvcState_t s_State = SVC_STATE_NORMAL;
-static uint32_t   s_ConfigTimeoutTick = 0;
-#define CONFIG_TIMEOUT_MS  30000 
+static LoRa_App_Adapter_t s_Adapter;
+static LoRa_Config_t      s_Config;
+
 #define CMD_PREFIX "CMD:"
 
-static void _Svc_ProcessPlatformCmd(char *cmd_str);
-static void _Svc_EnterConfigMode(uint32_t token);
-static void _Svc_CommitConfig(void);
-static void _Svc_AbortConfig(void);
-static void _Svc_NotifyEvent(LoRa_Event_t event, void *arg);
+// ============================================================
+//                    2. 内部辅助函数
+// ============================================================
 
-// --- 接口实现 ---
-const LoRa_Config_t* Service_GetConfig(void) {
-    return &g_LoRaConfig_Current;
-}
-
-static void _On_Mgr_RxData(uint8_t *data, uint16_t len, uint16_t src_id, int16_t rssi) {
-    if (len >= MGR_RX_BUF_SIZE) len = MGR_RX_BUF_SIZE - 1;
-    data[len] = '\0';
-    _Svc_NotifyEvent(LORA_EVENT_MSG_RECEIVED, data);
-    
-    if (len > strlen(CMD_PREFIX) && strncmp((char*)data, CMD_PREFIX, strlen(CMD_PREFIX)) == 0) {
-        _Svc_ProcessPlatformCmd((char*)(data + strlen(CMD_PREFIX)));
-    } else {
-        if (g_cb.OnRecvData) {
-            LoRa_RxMeta_t meta = { .rssi = -128, .snr = 0 };
-            g_cb.OnRecvData(src_id, data, len, &meta);
-        }
+static void _NotifyEvent(LoRa_Event_t evt, void *arg) {
+    if (s_Adapter.OnEvent) {
+        s_Adapter.OnEvent(evt, arg);
     }
 }
 
-static void _Svc_NotifyEvent(LoRa_Event_t event, void *arg) {
-    if (g_cb.OnEvent) g_cb.OnEvent(event, arg);
-}
+// 处理平台指令 (如 CMD:BIND=...)
+static void _ProcessPlatformCmd(char *cmd_str) {
+    char *cmd = strtok(cmd_str, "=");
+    char *params = strtok(NULL, "");
 
-void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_id) {
-    if (callbacks) g_cb = *callbacks;
-    if (g_cb.LoadConfig) g_cb.LoadConfig(&g_LoRaConfig_Current);
-    
-    if (g_LoRaConfig_Current.magic != LORA_CFG_MAGIC) {
-        if (g_cb.GetRandomSeed) srand(g_cb.GetRandomSeed());
-        g_LoRaConfig_Current.uuid = ((uint32_t)rand() << 16) | rand();
-        g_LoRaConfig_Current.magic    = LORA_CFG_MAGIC;
-        g_LoRaConfig_Current.token    = DEFAULT_LORA_TOKEN;
-        g_LoRaConfig_Current.net_id   = LORA_ID_UNASSIGNED;
-        g_LoRaConfig_Current.group_id = LORA_GROUP_ID_DEFAULT;
-        g_LoRaConfig_Current.hw_addr  = LORA_HW_ADDR_DEFAULT;
-        g_LoRaConfig_Current.channel  = DEFAULT_LORA_CHANNEL;
-        g_LoRaConfig_Current.power    = (uint8_t)DEFAULT_LORA_POWER;
-        g_LoRaConfig_Current.air_rate = (uint8_t)DEFAULT_LORA_RATE;
-        g_LoRaConfig_Current.tmode    = (uint8_t)DEFAULT_LORA_TMODE;
-        if (g_cb.SaveConfig) g_cb.SaveConfig(&g_LoRaConfig_Current);
-    }
-    
-    if (override_net_id != 0) g_LoRaConfig_Current.net_id = override_net_id;
-    
-    Manager_Init(g_LoRaConfig_Current.net_id, g_LoRaConfig_Current.group_id, 
-                 _On_Mgr_RxData, NULL, NULL);
-    
-    Drv_ApplyConfig(&g_LoRaConfig_Current);
-    Port_ClearRxBuffer();
-    _Svc_NotifyEvent(LORA_EVENT_INIT_SUCCESS, NULL);
-}
-
-void LoRa_Service_Run(void) {
-    Manager_Run();
-    if (s_State == SVC_STATE_CONFIGURING) {
-        if (g_cb.GetTick && (g_cb.GetTick() - s_ConfigTimeoutTick > CONFIG_TIMEOUT_MS)) {
-            _Svc_AbortConfig();
-        }
-    }
-}
-
-bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id) {
-    bool need_ack = (target_id != 0xFFFF) && LORA_ENABLE_ACK;
-    bool res = (Manager_Send(data, len, target_id, need_ack) == LORA_OK);
-    if (res) _Svc_NotifyEvent(LORA_EVENT_MSG_SENT, NULL);
-    return res;
-}
-
-void LoRa_Service_FactoryReset(void) {
-    _Svc_NotifyEvent(LORA_EVENT_FACTORY_RESET, NULL);
-    g_LoRaConfig_Current.magic = 0x00; 
-    if (g_cb.SaveConfig) g_cb.SaveConfig(&g_LoRaConfig_Current);
-    Drv_SmartConfig();
-    if (g_cb.SystemReset) g_cb.SystemReset();
-}
-
-static void _Svc_ProcessPlatformCmd(char *cmd_str) {
-    char *cmd = strtok(cmd_str, "="); 
-    char *params = strtok(NULL, "");  
     if (cmd == NULL) return;
 
+    // 1. BIND 指令: CMD:BIND=<uuid>,<new_id>
     if (strcmp(cmd, "BIND") == 0 && params != NULL) {
-        uint32_t target_uuid; uint16_t new_net_id;
+        uint32_t target_uuid;
+        uint16_t new_net_id;
         if (sscanf(params, "%u,%hu", &target_uuid, &new_net_id) == 2) {
-            if (target_uuid == g_LoRaConfig_Current.uuid) {
-                g_LoRaConfig_Current.net_id = new_net_id;
-                if (g_cb.SaveConfig) g_cb.SaveConfig(&g_LoRaConfig_Current);
-                _Svc_NotifyEvent(LORA_EVENT_BIND_SUCCESS, &new_net_id);
-                if (g_cb.SystemReset) g_cb.SystemReset();
+            if (target_uuid == s_Config.uuid) {
+                s_Config.net_id = new_net_id;
+                if (s_Adapter.SaveConfig) s_Adapter.SaveConfig(&s_Config);
+                _NotifyEvent(LORA_EVT_BIND_SUCCESS, &new_net_id);
+                if (s_Adapter.SystemReset) s_Adapter.SystemReset();
             }
         }
-    } else if (strcmp(cmd, "GROUP") == 0 && params != NULL) {
-        uint16_t new_group_id;
-        if (sscanf(params, "%hu", &new_group_id) == 1) {
-            g_LoRaConfig_Current.group_id = new_group_id;
-            if (g_cb.SaveConfig) g_cb.SaveConfig(&g_LoRaConfig_Current);
-            _Svc_NotifyEvent(LORA_EVENT_GROUP_UPDATE, &new_group_id);
-            if (g_cb.SystemReset) g_cb.SystemReset();
-        }
-    } else if (strcmp(cmd, "CFG") == 0 && params != NULL) {
-        int p_chan, p_pwr, p_rate;
-        if (sscanf(params, "%d,%d,%d", &p_chan, &p_pwr, &p_rate) == 3) {
-            g_LoRaConfig_Current.channel = (uint8_t)p_chan;
-            g_LoRaConfig_Current.power = (uint8_t)p_pwr;
-            g_LoRaConfig_Current.air_rate = (uint8_t)p_rate;
-            if (g_cb.SaveConfig) g_cb.SaveConfig(&g_LoRaConfig_Current);
-            _Svc_NotifyEvent(LORA_EVENT_CONFIG_COMMIT, NULL);
-            if (g_cb.SystemReset) g_cb.SystemReset();
-        }
-    } else if (strcmp(cmd, "RST") == 0) {
-        if (g_cb.SystemReset) g_cb.SystemReset();
-    } else if (strcmp(cmd, "FACTORY") == 0) {
-        LoRa_Service_FactoryReset();
+    }
+    // 2. RST 指令: CMD:RST
+    else if (strcmp(cmd, "RST") == 0) {
+        if (s_Adapter.SystemReset) s_Adapter.SystemReset();
+    }
+    // 3. FACTORY 指令: CMD:FACTORY
+    else if (strcmp(cmd, "FACTORY") == 0) {
+        Service_FactoryReset();
     }
 }
 
-static void _Svc_EnterConfigMode(uint32_t token) {
-    s_State = SVC_STATE_CONFIGURING;
-    if (g_cb.GetTick) s_ConfigTimeoutTick = g_cb.GetTick();
-    memcpy(&g_LoRaConfig_Pending, &g_LoRaConfig_Current, sizeof(LoRa_Config_t));
-    _Svc_NotifyEvent(LORA_EVENT_CONFIG_START, NULL);
+// Manager 接收回调
+static void _On_Mgr_Recv(uint8_t *data, uint16_t len, uint16_t src_id, int16_t rssi) {
+    // 1. 安全处理字符串
+    if (len >= MGR_RX_BUF_SIZE) len = MGR_RX_BUF_SIZE - 1;
+    data[len] = '\0';
+
+    // 2. 检查是否是平台指令
+    if (strncmp((char*)data, CMD_PREFIX, strlen(CMD_PREFIX)) == 0) {
+        _ProcessPlatformCmd((char*)(data + strlen(CMD_PREFIX)));
+    } 
+    else {
+        // 3. 透传给 App
+        if (s_Adapter.OnRecvData) {
+            LoRa_RxMeta_t meta = { .rssi = rssi, .snr = 0 };
+            s_Adapter.OnRecvData(src_id, data, len, &meta);
+        }
+        _NotifyEvent(LORA_EVT_MSG_RECV, NULL);
+    }
 }
 
-static void _Svc_CommitConfig(void) {
-    if (g_cb.SaveConfig) g_cb.SaveConfig(&g_LoRaConfig_Pending);
-    Drv_ApplyConfig(&g_LoRaConfig_Pending);
-    memcpy(&g_LoRaConfig_Current, &g_LoRaConfig_Pending, sizeof(LoRa_Config_t));
-    s_State = SVC_STATE_NORMAL;
-    _Svc_NotifyEvent(LORA_EVENT_CONFIG_COMMIT, NULL);
+// Manager 发送结果回调
+static void _On_Mgr_TxResult(bool success) {
+    if (success) {
+        _NotifyEvent(LORA_EVT_MSG_SENT, NULL);
+    }
 }
 
-static void _Svc_AbortConfig(void) {
-    s_State = SVC_STATE_NORMAL;
+// Manager 错误回调
+static void _On_Mgr_Error(LoRa_Result_t err) {
+    // 这里可以将错误码转换为事件通知 App
+    // 目前简化处理，仅在调试日志中体现
 }
+
+// ============================================================
+//                    3. 核心接口实现
+// ============================================================
+
+void Service_Init(const LoRa_App_Adapter_t *adapter, uint16_t override_net_id) {
+    if (adapter) s_Adapter = *adapter;
+    
+    // 1. 加载配置
+    if (s_Adapter.LoadConfig) {
+        s_Adapter.LoadConfig(&s_Config);
+    }
+    
+    // 2. 校验 Magic，无效则生成默认配置
+    if (s_Config.magic != LORA_CFG_MAGIC) {
+        if (s_Adapter.GetRandomSeed) srand(s_Adapter.GetRandomSeed());
+        s_Config.uuid = ((uint32_t)rand() << 16) | rand();
+        
+        s_Config.magic    = LORA_CFG_MAGIC;
+        s_Config.net_id   = LORA_ID_UNASSIGNED;
+        s_Config.group_id = LORA_GROUP_ID_DEFAULT;
+        s_Config.hw_addr  = LORA_HW_ADDR_DEFAULT;
+        s_Config.channel  = DEFAULT_LORA_CHANNEL;
+        s_Config.power    = DEFAULT_LORA_POWER;
+        s_Config.air_rate = DEFAULT_LORA_RATE;
+        s_Config.tmode    = DEFAULT_LORA_TMODE;
+        
+        if (s_Adapter.SaveConfig) s_Adapter.SaveConfig(&s_Config);
+    }
+    
+    // 3. 覆盖 NetID (调试用)
+    if (override_net_id != 0) {
+        s_Config.net_id = override_net_id;
+    }
+    
+    // 4. 初始化协议栈
+    Manager_Init(s_Config.net_id, s_Config.group_id, 
+                 _On_Mgr_Recv, _On_Mgr_TxResult, _On_Mgr_Error);
+    
+    // 5. 应用配置到驱动 (异步)
+    // 注意：这里我们假设 Driver 默认参数与 Config 一致，或者在 Init 后立即 Config
+    // 实际项目中，应该调用 Drv_AsyncConfig() 并传入参数
+    // 目前 V3.0 简化为使用 driver_config.c 中的静态表
+    Drv_AsyncConfig(); 
+    
+    _NotifyEvent(LORA_EVT_INIT_DONE, NULL);
+}
+
+void Service_Run(void) {
+    Manager_Run();
+}
+
+bool Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id) {
+    // 默认开启 ACK (除非是广播)
+    bool need_ack = (target_id != 0xFFFF) && LORA_ENABLE_ACK;
+    
+    LoRa_Result_t res = Manager_Send(data, len, target_id, need_ack);
+    return (res == LORA_OK);
+}
+
+bool Service_IsIdle(void) {
+    return Manager_IsIdle();
+}
+
+void Service_FactoryReset(void) {
+    s_Config.magic = 0x00; // 破坏 Magic
+    if (s_Adapter.SaveConfig) s_Adapter.SaveConfig(&s_Config);
+    _NotifyEvent(LORA_EVT_FACTORY_RESET, NULL);
+    if (s_Adapter.SystemReset) s_Adapter.SystemReset();
+}
+
+const LoRa_Config_t* Service_GetConfig(void) {
+    return &s_Config;
+}
+
