@@ -1,75 +1,48 @@
-/**
-  ******************************************************************************
-  * @file    lora_driver.h
-  * @author  LoRaPlat Team
-  * @brief   Layer 2: 通用异步驱动层 (Universal Asynchronous Driver)
-  ******************************************************************************
-  */
-
 #ifndef __LORA_DRIVER_H
 #define __LORA_DRIVER_H
 
-#include <stdint.h>
+#include "LoRaPlatConfig.h"
 #include <stdbool.h>
-#include <stddef.h> // for NULL
-#include "lora_port.h"
+#include <stdint.h>
 
 // ============================================================
-//                    1. 类型定义
+//                    1. 核心接口 (Core)
 // ============================================================
 
 /**
- * @brief 驱动操作结果码
+ * @brief  驱动初始化 (阻塞式)
+ * @note   包含握手、救砖、参数同步。耗时约 1-3 秒。
+ * @return true=成功, false=硬件故障
  */
-typedef enum {
-    LORA_OK = 0,            ///< 操作成功 / 请求已受理
-    LORA_ERR_BUSY,          ///< 驱动忙
-    LORA_ERR_PARAM,         ///< 参数错误
-    LORA_ERR_HARDWARE,      ///< 硬件故障 (如 AUX 永久拉高)
-    LORA_ERR_TIMEOUT,       ///< 操作超时
-    LORA_ERR_AT_FAIL        ///< AT 指令执行失败
-} LoRa_Result_t;
+bool Drv_Init(const LoRa_Config_t *cfg);
 
 /**
- * @brief 驱动内部状态机
+ * @brief  异步发送数据 (非阻塞)
+ * @param  data: 数据指针
+ * @param  len:  长度
+ * @return true=已启动DMA, false=忙或错误
  */
-typedef enum {
-    DRV_STATE_IDLE = 0,     ///< 空闲态
-    DRV_STATE_TX_RUNNING,   ///< 正在发送 (物理层忙)
-    DRV_STATE_TX_RECOVERY,  ///< 发送后冷却
-    DRV_STATE_AT_PROCESS,   ///< 正在执行 AT 指令序列
-} Drv_State_t;
+bool Drv_AsyncSend(const uint8_t *data, uint16_t len);
 
 /**
- * @brief AT 指令任务结构体
- * @note  用于定义配置流程
+ * @brief  读取接收数据
  */
-typedef struct {
-    const char *cmd;        ///< 发送指令 (字符串)
-    const char *expect;     ///< 期望回复 (字符串, NULL表示不检查)
-    uint16_t    wait_ms;    ///< 指令执行后的额外延时
-} AT_Job_t;
+uint16_t Drv_Read(uint8_t *buf, uint16_t max_len);
 
 /**
- * @brief 异步事件回调函数原型
+ * @brief  查询驱动是否忙碌
  */
-typedef void (*Drv_Callback_t)(LoRa_Result_t result);
+bool Drv_IsBusy(void);
 
 // ============================================================
-//                    2. 外部引用 (Config)
+//                    2. 配置接口 (Config)
 // ============================================================
 
-// 引用外部定义的配置任务表 (在 lora_driver_config.c 中定义)
-extern const AT_Job_t g_LoRaConfigJobs[];
-
-// ============================================================
-//                    3. 核心接口 (API)
-// ============================================================
-
-void          Drv_Init(Drv_Callback_t cb);
-void          Drv_Run(void);
-LoRa_Result_t Drv_AsyncSend(const uint8_t *data, uint16_t len);
-LoRa_Result_t Drv_AsyncConfig(void);
-Drv_State_t   Drv_GetState(void);
+// 获取 AT 指令字符串 (由 lora_driver_config.c 实现)
+const char* Drv_GetAtCmd_Reset(void);
+const char* Drv_GetAtCmd_Mode(uint8_t mode);
+void Drv_GetAtCmd_Rate(uint8_t channel, uint8_t rate, char *buf);
+void Drv_GetAtCmd_Addr(uint16_t addr, char *buf);
+void Drv_GetAtCmd_Power(uint8_t power, char *buf);
 
 #endif // __LORA_DRIVER_H

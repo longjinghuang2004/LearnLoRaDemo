@@ -1,34 +1,30 @@
-/**
-  ******************************************************************************
-  * @file    lora_driver_config.c
-  * @author  LoRaPlat Team
-  * @brief   Layer 2: 硬件差异化配置表
-  * @note    移植新模块时，仅需修改此文件中的 g_LoRaConfigJobs 表。
-  ******************************************************************************
-  */
-
 #include "lora_driver.h"
-#include <stddef.h> // for NULL
+#include <stdio.h>
 
-// ============================================================
-//                    ATK-LORA-01 配置表
-// ============================================================
-// 目标：配置为透传模式，信道23，速率19.2k
-// 注意：ATK模块在配置模式下波特率固定为 9600 或 115200，需与 Port 层初始化一致
+// --- ATK-LORA-01 指令集 ---
 
-const AT_Job_t g_LoRaConfigJobs[] = {
-    // 1. 握手测试
-    { "AT\r\n",              "OK", 50 },
-    
-    // 2. 设置为透传模式 (TMODE=0)
-    { "AT+TMODE=0\r\n",      "OK", 50 },
-    
-    // 3. 设置信道23, 空速19.2k (WLRATE=23,5)
-    { "AT+WLRATE=23,5\r\n",  "OK", 50 },
-    
-    // 4. 设置一般工作模式 (CWMODE=0)
-    { "AT+CWMODE=0\r\n",     "OK", 50 },
-    
-    // 结束符 (必须保留)
-    { NULL, NULL, 0 }
-};
+const char* Drv_GetAtCmd_Reset(void) {
+    return "AT+RESET\r\n";
+}
+
+const char* Drv_GetAtCmd_Mode(uint8_t mode) {
+    // 0=透传, 1=定向
+    return (mode == 0) ? "AT+TMODE=0\r\n" : "AT+TMODE=1\r\n";
+}
+
+void Drv_GetAtCmd_Rate(uint8_t channel, uint8_t rate, char *buf) {
+    // 映射速率: 0->0.3k ... 5->19.2k
+    // ATK 默认 5 (19.2k)
+    if (rate > 5) rate = 5;
+    sprintf(buf, "AT+WLRATE=%d,%d\r\n", channel, rate);
+}
+
+void Drv_GetAtCmd_Addr(uint16_t addr, char *buf) {
+    sprintf(buf, "AT+ADDR=%02X,%02X\r\n", (addr >> 8) & 0xFF, addr & 0xFF);
+}
+
+void Drv_GetAtCmd_Power(uint8_t power, char *buf) {
+    // 0=11dBm, 1=14dBm, 2=17dBm, 3=20dBm
+    if (power > 3) power = 3;
+    sprintf(buf, "AT+TPOWER=%d\r\n", power);
+}
