@@ -57,6 +57,9 @@ typedef struct {
     OnRxData_t      cb_on_rx;
     OnTxResult_t    cb_on_tx;
     OnError_t       cb_on_err;
+		
+		
+    bool     is_sending_ack; // [新增] 标记当前是否正在发送 ACK
 } LoRa_Manager_t;
 
 extern LoRa_Manager_t g_LoRaManager;

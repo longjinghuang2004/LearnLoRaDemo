@@ -97,6 +97,9 @@ static void _SendPendingAck(void) {
     ack_buf[idx++] = PROTOCOL_TAIL_1;
     
     Serial_HexDump("[MGR] TX ACK", ack_buf, idx);
+		
+    g_LoRaManager.is_sending_ack = true; // 标记为 ACK,markB		
+		
     _PhySend(ack_buf, idx);
     
     g_LoRaManager.ack_pending.pending = false;
@@ -223,6 +226,8 @@ bool Manager_SendPacket(const uint8_t *payload, uint16_t len, uint16_t target_id
     s_CurrentTxLen = idx;
     Serial_HexDump("[MGR] TX RAW", p, idx);
     
+    g_LoRaManager.is_sending_ack = false; // 标记为普通数据,markA
+		
     // 尝试发送
     if (_PhySend(p, idx)) {
         g_LoRaManager.retry_cnt = 0;
@@ -257,20 +262,26 @@ void Manager_Run(void) {
             break;
             
         case MGR_STATE_TX_RUNNING:
-            // 检查物理发送是否完成 (AUX 拉低)
             if (!Drv_IsBusy()) {
                 // 发送完成
-                // 检查是否需要等待 ACK
-                uint8_t ctrl_offset = (g_LoRaConfig_Current.tmode == 1) ? 6 : 3;
-                // 注意：这里简化处理，假设 TxBuffer 还没被覆盖
-                if (g_LoRaManager.TxBuffer[ctrl_offset] & CTRL_MASK_NEED_ACK) {
-                    g_LoRaManager.state = MGR_STATE_WAIT_ACK;
-                    g_LoRaManager.state_tick = now;
-                } else {
-                    if (g_LoRaManager.cb_on_tx) g_LoRaManager.cb_on_tx(true);
+                
+                // [修复] 如果是 ACK 包，发送完直接回 IDLE，绝不等待 ACK
+                if (g_LoRaManager.is_sending_ack) {
                     Manager_ResetState();
+                } 
+                else {
+                    // 普通数据包，检查 TxBuffer 中的控制位
+                    uint8_t ctrl_offset = (g_LoRaConfig_Current.tmode == 1) ? 6 : 3;
+                    if (g_LoRaManager.TxBuffer[ctrl_offset] & CTRL_MASK_NEED_ACK) {
+                        g_LoRaManager.state = MGR_STATE_WAIT_ACK;
+                        g_LoRaManager.state_tick = now;
+                    } else {
+                        if (g_LoRaManager.cb_on_tx) g_LoRaManager.cb_on_tx(true);
+                        Manager_ResetState();
+                    }
                 }
-            } 
+            }
+						
             else if (now - g_LoRaManager.state_tick > LORA_TX_TIMEOUT_MS) {
                 // 物理发送超时 (硬件死锁)
                 if (g_LoRaManager.cb_on_err) g_LoRaManager.cb_on_err(LORA_ERR_TX_TIMEOUT);
