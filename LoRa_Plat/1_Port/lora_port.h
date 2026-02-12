@@ -4,33 +4,37 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// 硬件相关宏定义
-#define LORA_UART_BAUDRATE  115200
+// ============================================================
+//                    1. 硬件钩子定义
+// ============================================================
+typedef struct {
+    void     (*Init)(void);             
+    uint32_t (*GetTick)(void);          
+    
+    void     (*Phy_StartTx)(const uint8_t *data, uint16_t len);
+    bool     (*Phy_IsBusy)(void);
+    uint32_t (*Phy_GetRecoveryTime)(void);
+    
+    void     (*Phy_SetMode)(bool config_mode); 
+    void     (*Phy_HardReset)(void);           
+    
+    uint16_t (*Phy_Read)(uint8_t *buf, uint16_t max_len);
+    void     (*Phy_ClearRx)(void);
 
-// --- 接口声明 ---
+} LoRa_Port_Hooks_t;
 
-// 端口初始化 (GPIO, UART, DMA, NVIC)
-void Port_Init(void);
+// ============================================================
+//                    2. 全局实例声明
+// ============================================================
 
-// 基础 IO 控制
-void Port_SetMD0(bool level);   // true=High(Config), false=Low(Comm)
-bool Port_GetAUX(void);         // true=High(Busy), false=Low(Idle)
-void Port_SetRST(bool level);   // true=High, false=Low(Reset active)
+// [关键] 暴露这个变量，Driver 层才能调用
+extern const LoRa_Port_Hooks_t g_LoRaPort;
 
-// 数据收发 (对接 DMA)
-// 返回实际写入 DMA 缓冲区的字节数
-uint16_t Port_WriteData(const uint8_t *data, uint16_t len);
+// 显式初始化函数
+void Port_Init_STM32(void);
 
-// 从 DMA 循环缓冲区读取数据
-// 返回实际读取的字节数
-uint16_t Port_ReadData(uint8_t *buf, uint16_t max_len);
-
-// 清空底层接收缓冲区
-void Port_ClearRxBuffer(void);
-
-// 系统时基 (ms)
+// 辅助函数声明 (供 Service 层调用)
+void Port_ClearRxBuffer(void); 
 uint32_t Port_GetTick(void);
-
-uint32_t Port_GetRandomSeed(void);
 
 #endif

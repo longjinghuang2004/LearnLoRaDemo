@@ -1,19 +1,28 @@
+/**
+  ******************************************************************************
+  * @file    main.c
+  * @author  LoRaPlat Team
+  * @brief   LoRaPlat V3.0 最终修复版
+  ******************************************************************************
+  */
+
 #include "stm32f10x.h"
 #include "Delay.h"
-#include "Serial.h"
+#include "Serial.h" 
 #include "LED.h"
 #include "Flash.h"
 #include "lora_service.h" 
+#include "lora_port.h"
 #include <string.h>
 #include <stdio.h>
 
-volatile uint8_t g_TimeoutFlag;
+// [修复] 补回 Timer.c 依赖的全局变量
+volatile uint8_t g_TimeoutFlag = 0;
 
 // ============================================================================
-// [测试角色配置] - 编译前请修改此处
-// ============================================================================
-// 1 = HOST (主机): 连接PC串口助手，发送指令，控制从机
-// 2 = SLAVE (从机): 独立运行，接收指令并回响(Echo)，执行动作
+// [测试角色配置]
+// 1 = HOST (主机)
+// 2 = SLAVE (从机)
 // ============================================================================
 #define TEST_ROLE      2
 
@@ -23,6 +32,7 @@ volatile uint8_t g_TimeoutFlag;
 
 void Adapter_SaveConfig(const LoRa_Config_t *cfg) {
     Flash_WriteLoRaConfig(cfg);
+    Serial_Printf("[APP] Config Saved.\r\n");
 }
 
 void Adapter_LoadConfig(LoRa_Config_t *cfg) {
@@ -34,63 +44,74 @@ uint32_t Adapter_GetTick(void) {
 }
 
 uint32_t Adapter_GetRandomSeed(void) {
-    extern uint32_t Port_GetRandomSeed(void);
-    return Port_GetRandomSeed();
+    return GetTick() ^ (*(uint32_t*)0x20000000); 
 }
 
 void Adapter_SystemReset(void) {
-    printf("[SYS] System Resetting...\r\n");
-    Delay_ms(100); // 仅此处允许短暂阻塞以确保打印完成
+    Serial_Printf("[APP] Resetting...\r\n");
+    for(volatile int i=0; i<1000000; i++); 
     NVIC_SystemReset();
 }
 
 // [关键] 接收数据回调
 void Adapter_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta) {
-    // 1. 打印接收到的数据
-    printf("[APP] RX from ID:0x%04X | Len:%d | Payload: %s\r\n", src_id, len, data);
+    Serial_Printf("[APP] RX from ID:0x%04X | Payload: %s\r\n", src_id, data);
     
-    // 2. 业务逻辑: LED 控制
     if (strstr((const char*)data, "LED_ON")) {
-        LED2_ON(); 
-        printf("    -> Action: LED ON\r\n");
+        LED1_ON(); 
+        Serial_Printf("    -> Action: LED ON\r\n");
     } else if (strstr((const char*)data, "LED_OFF")) {
-        LED2_OFF();
-        printf("    -> Action: LED OFF\r\n");
+        LED1_OFF();
+        Serial_Printf("    -> Action: LED OFF\r\n");
     }
 
-    // 3. [从机模式] 自动回响 (Echo)
+    // [从机模式] 自动回响
 #if (TEST_ROLE == 2)
-    char reply[64];
-    snprintf(reply, 64, "Echo: %s", data);
-    
-    // 尝试发送回响
-    // 注意：如果此时驱动正忙（极低概率，因为刚收完），这里会返回 false
-    if (!LoRa_Service_Send((uint8_t*)reply, strlen(reply), src_id)) {
-        printf("[APP] Echo Failed: Driver Busy\r\n");
-    } else {
-        printf("[APP] Echo Sent\r\n");
+    if (src_id != 0xFFFF) {
+        char reply[64];
+        snprintf(reply, 64, "Echo: %s", data);
+        
+        // 使用 LoRa_Service_Send
+        if (!LoRa_Service_Send((uint8_t*)reply, strlen(reply), src_id)) {
+            Serial_Printf("[APP] Echo Failed: Busy\r\n");
+        } else {
+            Serial_Printf("[APP] Echo Queued\r\n");
+        }
     }
 #endif
 }
 
 // [关键] 系统事件回调
 void Adapter_OnEvent(LoRa_Event_t event, void *arg) {
+    const LoRa_Config_t *cfg = Service_GetConfig();
+
     switch(event) {
         case LORA_EVENT_INIT_SUCCESS:
-            printf("[EVT] LoRa Init OK. NetID:0x%04X\r\n", g_LoRaConfig_Current.net_id);
+            Serial_Printf("[EVT] LoRa Init Done.\r\n");
+            if (cfg) {
+                Serial_Printf("      UUID: 0x%08X\r\n", cfg->uuid);
+                Serial_Printf("      NetID: %d\r\n", cfg->net_id);
+            }
             break;
+            
         case LORA_EVENT_MSG_SENT:
-            printf("[EVT] TX Complete (Async Callback)\r\n");
+            Serial_Printf("[EVT] TX Complete\r\n");
             break;
+            
         case LORA_EVENT_MSG_RECEIVED:
-            // 物理层收到包的瞬间，LED1 闪一下
-            LED1_Turn();
+            LED2_Turn();
             break;
+            
+        case LORA_EVENT_BIND_SUCCESS:
+            Serial_Printf("[EVT] BIND Success! New ID: %d\r\n", *(uint16_t*)arg);
+            break;
+            
         default: break;
     }
 }
 
-const LoRa_Callback_t my_callbacks = {
+// 结构体名称修正为 LoRa_Callback_t
+const LoRa_Callback_t my_adapter = {
     .SaveConfig     = Adapter_SaveConfig,
     .LoadConfig     = Adapter_LoadConfig,
     .GetTick        = Adapter_GetTick,
@@ -104,15 +125,28 @@ const LoRa_Callback_t my_callbacks = {
 // 2. 辅助函数
 // ============================================================================
 
-void Show_Help(void) {
-    printf("\r\n=== LoRaPlat V2.3 Async FSM Test ===\r\n");
-    printf("Role: %s\r\n", (TEST_ROLE==1)?"HOST":"SLAVE");
-    printf("Commands (Type in Serial):\r\n");
-    printf("  LED_ON     : Remote LED ON\r\n");
-    printf("  LED_OFF    : Remote LED OFF\r\n");
-    printf("  (Any text) : Broadcast send\r\n");
-    printf("Note: LED1 blinks fast (10Hz) to prove system is NON-BLOCKING.\r\n");
-    printf("====================================\r\n");
+void Force_Init_Config(void) {
+    LoRa_Config_t cfg;
+    Flash_ReadLoRaConfig(&cfg);
+    
+    uint16_t target_id = (TEST_ROLE == 1) ? 1 : 2;
+    uint16_t target_group = 100; 
+    
+    if (cfg.net_id != target_id || cfg.group_id != target_group || cfg.magic != LORA_CFG_MAGIC) {
+        Serial_Printf("[TEST] Forcing Config...\r\n");
+        memset(&cfg, 0, sizeof(LoRa_Config_t));
+        cfg.magic = LORA_CFG_MAGIC;
+        cfg.net_id = target_id;
+        cfg.group_id = target_group; 
+        cfg.uuid = (TEST_ROLE == 1) ? 0xAAAA1111 : 0xBBBB2222;
+        cfg.hw_addr = LORA_HW_ADDR_DEFAULT;
+        cfg.channel = DEFAULT_LORA_CHANNEL;
+        cfg.power = DEFAULT_LORA_POWER;
+        cfg.air_rate = DEFAULT_LORA_RATE;
+        cfg.tmode = DEFAULT_LORA_TMODE;
+        Flash_WriteLoRaConfig(&cfg);
+        Adapter_SystemReset();
+    }
 }
 
 // ============================================================================
@@ -121,68 +155,55 @@ void Show_Help(void) {
 
 int main(void)
 {
-    // 基础硬件初始化
     SysTick_Init();
     LED_Init();
     Serial_Init();
+    Port_Init_STM32();
     
-    // 打印欢迎信息
-    Show_Help();
+    Force_Init_Config();
+    
+    Serial_Printf("\r\n=== LoRaPlat V3.0 Async Fixed ===\r\n");
+    Serial_Printf("Role: %s\r\n", (TEST_ROLE==1)?"HOST":"SLAVE");
 
-    // LoRa 服务初始化 (非阻塞，立即返回)
-    // 内部会启动 FSM 进行复位，此时 LoRa 模块可能还在拉低 RST，但这里已经返回了
-    LoRa_Service_Init(&my_callbacks, 0); 
+    // 使用 LoRa_Service_Init
+    LoRa_Service_Init(&my_adapter, 0); 
 
     uint32_t last_blink = 0;
 
     while (1)
     {
-        // ---------------------------------------------------------
-        // 1. 协议栈心跳 (必须高频调用)
-        // ---------------------------------------------------------
-        // 所有的超时检测、状态跳转、数据接收都在这里发生
+        // 使用 LoRa_Service_Run
         LoRa_Service_Run();
 
-        // ---------------------------------------------------------
-        // 2. 业务逻辑: 串口透传 (仅主机)
-        // ---------------------------------------------------------
 #if (TEST_ROLE == 1)
         if (Serial_RxFlag == 1)
         {
-            char *cmd_buf = Serial_RxPacket;
-            int len = strlen(cmd_buf);
-            // 去除换行符
-            while(len > 0 && (cmd_buf[len-1] == '\r' || cmd_buf[len-1] == '\n')) cmd_buf[--len] = '\0';
+            char *input = Serial_RxPacket;
+            int len = strlen(input);
+            while(len > 0 && (input[len-1] == '\r' || input[len-1] == '\n')) input[--len] = '\0';
 
             if (len > 0) {
-                printf("[APP] Request TX: %s\r\n", cmd_buf);
+                Serial_Printf("[PC] Input: %s\r\n", input);
                 
-                // 调用异步发送接口
-                // 如果驱动正忙，这里会立即返回 false，不会死等
-                if (!LoRa_Service_Send((uint8_t*)cmd_buf, len, 0xFFFF)) {
-                    printf("[APP] Error: System Busy! (Try again later)\r\n");
+                if (strncmp(input, "CMD ", 4) == 0) {
+                    int target_id;
+                    char msg[64];
+                    if (sscanf(input + 4, "%d %[^\n]", &target_id, msg) == 2) {
+                        Serial_Printf(" -> Sending to %d: %s\r\n", target_id, msg);
+                        // 使用 LoRa_Service_Send
+                        if (!LoRa_Service_Send((uint8_t*)msg, strlen(msg), target_id)) {
+                            Serial_Printf("[APP] Busy!\r\n");
+                        }
+                    }
                 }
             }
             Serial_RxFlag = 0; 
         }
 #endif
 
-        // ---------------------------------------------------------
-        // 3. 验证非阻塞特性: LED 心跳
-        // ---------------------------------------------------------
-        // 无论 LoRa 是否在发送、复位或等待超时，这个 LED 都应该均匀闪烁
-        // 如果 LED 卡顿，说明驱动层存在阻塞代码
-        if (GetTick() - last_blink > 50) { // 10Hz 极速闪烁
+        if (GetTick() - last_blink > 50) { 
             last_blink = GetTick();
             LED1_Turn(); 
-        }
-
-        // ---------------------------------------------------------
-        // 4. 低功耗尝试 (Phase 1 预留)
-        // ---------------------------------------------------------
-        if (LoRa_Service_IsIdle() && !Serial_RxFlag) {
-            // 只有当 LoRa 驱动空闲(IDLE)且串口无数据时，才允许休眠
-            // __WFI(); 
         }
     }
 }

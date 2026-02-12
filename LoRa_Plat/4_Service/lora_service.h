@@ -9,40 +9,39 @@
 //                    1. 数据结构定义
 // ============================================================
 
-// 接收元数据 (为未来组网预留)
+// 接收元数据
 typedef struct {
-    int16_t rssi; // 接收信号强度 (dBm), -128表示无效
-    int8_t  snr;  // 信噪比 (dB), 0表示无效
+    int16_t rssi; 
+    int8_t  snr;  
 } LoRa_RxMeta_t;
 
-// 事件定义
+// 事件定义 (修复：补全所有事件)
 typedef enum {
     LORA_EVENT_INIT_SUCCESS = 0,
-    LORA_EVENT_BIND_SUCCESS,    // 绑定新ID成功
-    LORA_EVENT_GROUP_UPDATE,    // [新增] 组ID更新
-    LORA_EVENT_CONFIG_START,    // 进入配置模式
-    LORA_EVENT_CONFIG_COMMIT,   // 配置提交
-    LORA_EVENT_FACTORY_RESET,   // 恢复出厂
-    LORA_EVENT_REBOOT_REQ,      // 请求重启
-    LORA_EVENT_MSG_RECEIVED,    // 收到任意消息
-    LORA_EVENT_MSG_SENT         // 发送完成
+    LORA_EVENT_BIND_SUCCESS,    
+    LORA_EVENT_GROUP_UPDATE,    
+    LORA_EVENT_CONFIG_START,    
+    LORA_EVENT_CONFIG_COMMIT,   
+    LORA_EVENT_FACTORY_RESET,   
+    LORA_EVENT_REBOOT_REQ,      
+    LORA_EVENT_MSG_RECEIVED,    
+    LORA_EVENT_MSG_SENT         
 } LoRa_Event_t;
 
 // ============================================================
 //                    2. 抽象接口定义 (回调函数)
 // ============================================================
 typedef struct {
-    // --- 存储接口 (必须实现) ---
+    // --- 存储接口 ---
     void (*SaveConfig)(const LoRa_Config_t *cfg);
     void (*LoadConfig)(LoRa_Config_t *cfg);
     
-    // --- 硬件能力接口 (必须实现) ---
+    // --- 硬件能力接口 ---
     uint32_t (*GetTick)(void);
     uint32_t (*GetRandomSeed)(void);
     void (*SystemReset)(void);
     
-    // --- 业务接口 (可选) ---
-    // [修改] 增加 meta 参数
+    // --- 业务接口 ---
     void (*OnRecvData)(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta);
     
     // 系统事件通知
@@ -56,30 +55,12 @@ typedef struct {
 
 extern LoRa_Config_t g_LoRaConfig_Current;
 
-/**
-  * @brief  初始化 LoRa 服务层
-  */
 void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_id);
-
-/**
-  * @brief  服务层主循环
-  */
 void LoRa_Service_Run(void);
-
-/**
-  * @brief  发送数据
-  */
 bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id);
-
-/**
-  * @brief  查询服务层是否空闲 (用于低功耗判断)
-  * @return true=空闲, false=忙碌
-  */
-bool LoRa_Service_IsIdle(void);
-
-/**
-  * @brief  执行工厂重置
-  */
 void LoRa_Service_FactoryReset(void);
 
-#endif // __LORA_SERVICE_H
+// [修复] 暴露此接口供 Manager 和 Main 使用
+const LoRa_Config_t* Service_GetConfig(void);
+
+#endif

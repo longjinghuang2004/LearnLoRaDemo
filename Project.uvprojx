@@ -339,7 +339,7 @@
               <MiscControls>--no-multibyte-chars</MiscControls>
               <Define>USE_STDPERIPH_DRIVER</Define>
               <Undefine></Undefine>
-              <IncludePath>.\Start;.\Library;.\User;.\System;.\Hardware;.\function;.\Model;.\LoRa_Plat;.\LoRa_Plat\1_Port;.\LoRa_Plat\Driver;.\LoRa_Plat\2_Core;.\LoRa_Plat\3_Manager;.\LoRa_Plat\4_App;.\LoRa_Plat\4_Service</IncludePath>
+              <IncludePath>.\Start;.\Library;.\User;.\System;.\Hardware;.\function;.\Model;.\LoRa_Plat;.\LoRa_Plat\1_Port;.\LoRa_Plat\Driver;.\LoRa_Plat\3_Manager;.\LoRa_Plat\4_Service</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -849,16 +849,6 @@
               <FilePath>.\LoRa_Plat\3_Manager\lora_manager.h</FilePath>
             </File>
             <File>
-              <FileName>driver_atk_lora01.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\LoRa_Plat\Driver\driver_atk_lora01.c</FilePath>
-            </File>
-            <File>
-              <FileName>lora_driver.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\LoRa_Plat\Driver\lora_driver.h</FilePath>
-            </File>
-            <File>
               <FileName>lora_service.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\LoRa_Plat\4_Service\lora_service.c</FilePath>
@@ -867,6 +857,21 @@
               <FileName>lora_service.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\LoRa_Plat\4_Service\lora_service.h</FilePath>
+            </File>
+            <File>
+              <FileName>lora_driver.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\Driver\lora_driver.h</FilePath>
+            </File>
+            <File>
+              <FileName>lora_driver_config.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\Driver\lora_driver_config.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_driver_core.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\Driver\lora_driver_core.c</FilePath>
             </File>
           </Files>
         </Group>
