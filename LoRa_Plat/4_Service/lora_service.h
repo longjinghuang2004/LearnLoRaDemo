@@ -72,6 +72,12 @@ void LoRa_Service_Run(void);
 bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id);
 
 /**
+  * @brief  查询服务层是否空闲 (用于低功耗判断)
+  * @return true=空闲, false=忙碌
+  */
+bool LoRa_Service_IsIdle(void);
+
+/**
   * @brief  执行工厂重置
   */
 void LoRa_Service_FactoryReset(void);

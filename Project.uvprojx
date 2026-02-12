@@ -849,16 +849,6 @@
               <FilePath>.\LoRa_Plat\3_Manager\lora_manager.h</FilePath>
             </File>
             <File>
-              <FileName>mod_lora.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\LoRa_Plat\2_Core\mod_lora.c</FilePath>
-            </File>
-            <File>
-              <FileName>mod_lora.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\LoRa_Plat\2_Core\mod_lora.h</FilePath>
-            </File>
-            <File>
               <FileName>driver_atk_lora01.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\LoRa_Plat\Driver\driver_atk_lora01.c</FilePath>

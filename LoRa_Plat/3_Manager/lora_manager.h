@@ -5,17 +5,17 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// 缓冲区大小 (保持不变)
+// 缓冲区大小 
 #define MGR_TX_BUF_SIZE     512
 #define MGR_RX_BUF_SIZE     512
 
-// 协议常量 (保持不变)
+// 协议常量 
 #define PROTOCOL_HEAD_0     'C'
 #define PROTOCOL_HEAD_1     'M'
 #define PROTOCOL_TAIL_0     '\r'
 #define PROTOCOL_TAIL_1     '\n'
 
-// 控制字掩码 (保持不变)
+// 控制字掩码 
 #define CTRL_MASK_TYPE      0x80 
 #define CTRL_MASK_NEED_ACK  0x40 
 #define CTRL_MASK_HAS_CRC   0x20 
@@ -23,24 +23,14 @@
 // 状态机状态
 typedef enum {
     MGR_STATE_IDLE = 0,
-    MGR_STATE_TX_CHECK_AUX,
-    MGR_STATE_TX_SENDING,
-    MGR_STATE_WAIT_ACK,
+    MGR_STATE_TX_SENDING, // 正在等待驱动层发送完成
+    MGR_STATE_WAIT_ACK,   // 正在等待对方 ACK
 } MgrState_t;
-
-// 错误码
-typedef enum {
-    LORA_ERR_NONE = 0,
-    LORA_ERR_TX_TIMEOUT,
-    LORA_ERR_ACK_TIMEOUT,
-    LORA_ERR_CRC_FAIL,
-    LORA_ERR_MEM_OVERFLOW
-} LoRaError_t;
 
 // 回调函数原型
 typedef void (*OnRxData_t)(uint8_t *data, uint16_t len, uint16_t src_id);
 typedef void (*OnTxResult_t)(bool success);
-typedef void (*OnError_t)(LoRaError_t err);
+typedef void (*OnError_t)(LoRa_Result_t err); // [修改] 使用统一错误码
 
 typedef struct {
     uint8_t TxBuffer[MGR_TX_BUF_SIZE];
@@ -52,9 +42,9 @@ typedef struct {
     uint8_t    retry_cnt;
     uint16_t   rx_len;
     
-    // [修改] 身份信息
+    // 身份信息
     uint16_t   local_id;    // 当前逻辑 ID (NetID)
-    uint16_t   group_id;    // [新增] 组 ID
+    uint16_t   group_id;    // 组 ID
     uint32_t   uuid;        // 唯一标识
     
     OnRxData_t      cb_on_rx;
