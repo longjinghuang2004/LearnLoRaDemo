@@ -39,6 +39,12 @@ bool Port_GetAUX_Raw(void);
 bool Port_IsAuxBusy(void);
 
 /**
+ * @brief  强制同步 AUX 状态 (消除初始化残留)
+ * @note   在 Drv_Init 结束时调用
+ */
+void Port_SyncAuxState(void);
+
+/**
  * @brief  控制 RST 引脚 (如果有)
  */
 void Port_SetRST(bool level);

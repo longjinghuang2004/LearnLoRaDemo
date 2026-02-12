@@ -109,7 +109,7 @@ void Port_Init(void)
     
     // 初始状态同步
     Port_SetMD0(false);
-    s_IsAuxBusy = (GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5) == 1);
+    Port_SyncAuxState(); // [关键] 初始同步
 }
 
 void Port_SetMD0(bool level) {
@@ -124,22 +124,52 @@ bool Port_IsAuxBusy(void) {
     return s_IsAuxBusy;
 }
 
+
+void Port_SyncAuxState(void) {
+    NVIC_DisableIRQ(EXTI9_5_IRQn);
+    
+    s_IsAuxBusy = (GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5) == 1);
+    
+    // [新增] 强制复位 DMA 硬件状态
+    // 无论之前 DMA 处于什么死锁状态，现在全部清零
+    DMA_Cmd(DMA1_Channel2, DISABLE);
+    DMA1_Channel2->CNDTR = 0;
+    s_TxDmaBusy = false;
+    
+    EXTI_ClearITPendingBit(EXTI_Line5);
+    NVIC_EnableIRQ(EXTI9_5_IRQn);
+}
+
+
 void Port_SetRST(bool level) {
     // 如有 RST 引脚，在此实现
 }
 
+
+
+// [核心修复] 回归 V2.2 的暴力发送逻辑
+// 只要上层(Driver)判断 AUX 空闲并调用了此函数，我们就无条件发送。
+// 不再检查 s_TxDmaBusy 或 CNDTR，防止因标志位不同步导致的死锁。
 uint16_t Port_WriteData(const uint8_t *data, uint16_t len) {
-    if (s_TxDmaBusy || len > PORT_DMA_TX_BUF_SIZE) return 0;
-    
+    if (len == 0 || len > PORT_DMA_TX_BUF_SIZE) return 0;
+
+    // 1. 标记忙碌 (仅用于 ISR 清除，不用于阻塞发送)
     s_TxDmaBusy = true;
+    
+    // 2. 填充数据
     memcpy(s_DmaTxBuf, data, len);
     
+    // 3. 暴力重启 DMA (V2.2 核心逻辑)
+    // 无论 DMA 之前在干什么（哪怕卡死了），直接复位并启动新传输
     DMA_Cmd(DMA1_Channel2, DISABLE);
     DMA1_Channel2->CNDTR = len;
     DMA_Cmd(DMA1_Channel2, ENABLE);
     
     return len;
 }
+
+
+
 
 uint16_t Port_ReadData(uint8_t *buf, uint16_t max_len) {
     uint16_t cnt = 0;
@@ -169,6 +199,11 @@ void Port_ReInitUart(uint32_t baudrate) {
     USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
     USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
     USART_Init(USART3, &USART_InitStructure);
+    
+    // [关键] 重新初始化 UART 后，必须再次使能 DMA 请求！
+    // 否则 DMA 将永远收不到 UART 的请求信号，导致发送卡死。
+    USART_DMACmd(USART3, USART_DMAReq_Rx | USART_DMAReq_Tx, ENABLE);
+    
     USART_Cmd(USART3, ENABLE);
 }
 
@@ -186,7 +221,6 @@ void DMA1_Channel2_IRQHandler(void) {
 void EXTI9_5_IRQHandler(void) {
     if (EXTI_GetITStatus(EXTI_Line5) != RESET) {
         // 读取当前电平更新标志
-        // 简单的防抖可以在这里做，但为了响应速度，直接读
         s_IsAuxBusy = (GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5) == 1);
         EXTI_ClearITPendingBit(EXTI_Line5);
     }

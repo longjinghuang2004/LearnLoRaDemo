@@ -101,20 +101,39 @@ bool Drv_Init(const LoRa_Config_t *cfg) {
     Delay_ms(600); 
     while(Port_GetAUX_Raw()); // 等待 AUX 变低
     
+    // [关键修复] 强制同步 AUX 状态，消除初始化残留
+    Port_SyncAuxState();
+    
     Port_ClearRxBuffer();
     return cfg_ok;
 }
 
+//warning!!!
+
+#if (LORA_DEBUG_PRINT)
+
+#endif
+
+
+
 bool Drv_AsyncSend(const uint8_t *data, uint16_t len) {
-    // 1. 检查 AUX (Fail Fast)
-    if (Port_IsAuxBusy()) return false;
-    
-    // 2. 启动 DMA
-    if (Port_WriteData(data, len) > 0) {
-        return true;
+    // 1. 唯一的阻塞条件：物理引脚 AUX 显示忙
+    // 只要 AUX 是闲的，无论 DMA 状态如何，我们都认为可以发送
+    if (Port_IsAuxBusy()) {
+        // 双重检查：防止中断漏触发导致的软件标志位虚假忙碌
+        if (Port_GetAUX_Raw()) {
+            return false; // 真的忙
+        } else {
+            // 软件说忙，硬件说闲 -> 自愈
+            Port_SyncAuxState();
+        }
     }
-    return false;
+    
+    // 2. 启动 DMA (Port 层会暴力重置 DMA，确保发送成功)
+    Port_WriteData(data, len);
+    return true;
 }
+
 
 uint16_t Drv_Read(uint8_t *buf, uint16_t max_len) {
     return Port_ReadData(buf, max_len);
