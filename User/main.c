@@ -23,7 +23,7 @@ volatile uint8_t g_TimeoutFlag;
 // 1 = HOST (主机): ID=1, Group=100
 // 2 = SLAVE (从机): ID=2, Group=100
 // ============================================================================
-#define TEST_ROLE      2
+#define TEST_ROLE      1
 
 // ============================================================================
 // 1. 接口适配 (Adapter Layer)
@@ -118,8 +118,8 @@ void Adapter_OnEvent(LoRa_Event_t event, void *arg) {
 const LoRa_Callback_t my_adapter = {
     .SaveConfig     = Adapter_SaveConfig,
     .LoadConfig     = Adapter_LoadConfig,
-    .GetTick        = Adapter_GetTick,
-    .GetRandomSeed  = Adapter_GetRandomSeed,
+    //.OSAL_GetTick        = Adapter_GetTick,
+    //.GetRandomSeed  = Adapter_GetRandomSeed,
     .SystemReset    = Adapter_SystemReset,
     .OnRecvData     = Adapter_OnRecvData,
     .OnEvent        = Adapter_OnEvent
@@ -181,7 +181,12 @@ int main(void)
     
     // 注意：Port_Init 已经在 Drv_Init 内部调用，这里不需要显式调用 Port_Init_STM32
     // 如果你的 Port 层没有暴露 Port_Init_STM32，就不要调用它
-    
+	
+	
+    extern void Demo_OSAL_Init(void); 
+    Demo_OSAL_Init();
+	
+	
     Force_Init_Config();
     Show_Help();
 

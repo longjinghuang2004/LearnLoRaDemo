@@ -1,12 +1,18 @@
+#include "LoRaPlatConfig.h"
+
 #include "lora_port.h"
-#include "stm32f10x.h"
+#include "stm32f10x.h"  // <--- 硬件依赖仅限于此文件
 #include <string.h>
-#include "Delay.h" // 仅用于 GetTick
+//#include "Delay.h"      // 暂时保留对 System/Delay.h 的依赖，后续用 OSAL 替换
+
+#include "lora_osal.h"
+
 
 // --- DMA 缓冲区 ---
 #define PORT_DMA_RX_BUF_SIZE 512
 #define PORT_DMA_TX_BUF_SIZE 512
 
+// 放在静态区，避免栈溢出
 static uint8_t  s_DmaRxBuf[PORT_DMA_RX_BUF_SIZE];
 static uint8_t  s_DmaTxBuf[PORT_DMA_TX_BUF_SIZE];
 static volatile uint16_t s_RxReadIndex = 0;
@@ -14,6 +20,10 @@ static volatile uint16_t s_RxReadIndex = 0;
 // --- 状态标志 ---
 static volatile bool s_TxDmaBusy = false;
 static volatile bool s_IsAuxBusy = false; // 由 EXTI 维护
+
+// ============================================================
+//                    1. 初始化与配置
+// ============================================================
 
 void Port_Init(void)
 {
@@ -95,7 +105,7 @@ void Port_Init(void)
     EXTI_InitStructure.EXTI_LineCmd = ENABLE;
     EXTI_Init(&EXTI_InitStructure);
 
-    // EXTI 中断优先级 (低优先级，防止打断通信)
+    // EXTI 中断优先级
     NVIC_InitStructure.NVIC_IRQChannel = EXTI9_5_IRQn;
     NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 3;
     NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
@@ -109,8 +119,26 @@ void Port_Init(void)
     
     // 初始状态同步
     Port_SetMD0(false);
-    Port_SyncAuxState(); // [关键] 初始同步
+    Port_SyncAuxState(); 
 }
+
+void Port_ReInitUart(uint32_t baudrate) {
+    USART_InitTypeDef USART_InitStructure;
+    USART_InitStructure.USART_BaudRate = baudrate;
+    USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+    USART_InitStructure.USART_StopBits = USART_StopBits_1;
+    USART_InitStructure.USART_Parity = USART_Parity_No;
+    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+    USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+    USART_Init(USART3, &USART_InitStructure);
+    
+    USART_DMACmd(USART3, USART_DMAReq_Rx | USART_DMAReq_Tx, ENABLE);
+    USART_Cmd(USART3, ENABLE);
+}
+
+// ============================================================
+//                    2. IO 操作
+// ============================================================
 
 void Port_SetMD0(bool level) {
     GPIO_WriteBit(GPIOA, GPIO_Pin_4, level ? Bit_SET : Bit_RESET);
@@ -124,57 +152,59 @@ bool Port_IsAuxBusy(void) {
     return s_IsAuxBusy;
 }
 
-
 void Port_SyncAuxState(void) {
-    NVIC_DisableIRQ(EXTI9_5_IRQn);
+    // 临时关中断，防止状态竞争
+		OSAL_EnterCritical();
     
     s_IsAuxBusy = (GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5) == 1);
     
-    // [新增] 强制复位 DMA 硬件状态
-    // 无论之前 DMA 处于什么死锁状态，现在全部清零
+    // 强制复位 DMA 硬件状态
     DMA_Cmd(DMA1_Channel2, DISABLE);
     DMA1_Channel2->CNDTR = 0;
     s_TxDmaBusy = false;
     
     EXTI_ClearITPendingBit(EXTI_Line5);
-    NVIC_EnableIRQ(EXTI9_5_IRQn);
+    
+    OSAL_ExitCritical();
 }
-
 
 void Port_SetRST(bool level) {
     // 如有 RST 引脚，在此实现
+    // GPIO_WriteBit(GPIOA, GPIO_Pin_X, level ? Bit_SET : Bit_RESET);
 }
 
+// ============================================================
+//                    3. 数据收发 (DMA)
+// ============================================================
 
-
-// [核心修复] 回归 V2.2 的暴力发送逻辑
-// 只要上层(Driver)判断 AUX 空闲并调用了此函数，我们就无条件发送。
-// 不再检查 s_TxDmaBusy 或 CNDTR，防止因标志位不同步导致的死锁。
 uint16_t Port_WriteData(const uint8_t *data, uint16_t len) {
     if (len == 0 || len > PORT_DMA_TX_BUF_SIZE) return 0;
 
-    // 1. 标记忙碌 (仅用于 ISR 清除，不用于阻塞发送)
+    // [优化] 临界区保护：防止 DMA 配置过程中被中断打断
+    OSAL_EnterCritical();
+
+    // 1. 标记忙碌
     s_TxDmaBusy = true;
     
     // 2. 填充数据
     memcpy(s_DmaTxBuf, data, len);
     
-    // 3. 暴力重启 DMA (V2.2 核心逻辑)
-    // 无论 DMA 之前在干什么（哪怕卡死了），直接复位并启动新传输
+    // 3. 暴力重启 DMA
     DMA_Cmd(DMA1_Channel2, DISABLE);
     DMA1_Channel2->CNDTR = len;
     DMA_Cmd(DMA1_Channel2, ENABLE);
     
+    OSAL_ExitCritical();
+    
     return len;
 }
 
-
-
-
 uint16_t Port_ReadData(uint8_t *buf, uint16_t max_len) {
     uint16_t cnt = 0;
+    // 获取 DMA 当前写入位置 (硬件指针)
     uint16_t dma_write_idx = PORT_DMA_RX_BUF_SIZE - DMA_GetCurrDataCounter(DMA1_Channel3);
     
+    // 循环读取直到追上硬件指针
     while (s_RxReadIndex != dma_write_idx && cnt < max_len) {
         buf[cnt++] = s_DmaRxBuf[s_RxReadIndex++];
         if (s_RxReadIndex >= PORT_DMA_RX_BUF_SIZE) s_RxReadIndex = 0;
@@ -186,28 +216,55 @@ void Port_ClearRxBuffer(void) {
     s_RxReadIndex = PORT_DMA_RX_BUF_SIZE - DMA_GetCurrDataCounter(DMA1_Channel3);
 }
 
+// ============================================================
+//                    4. 辅助功能
+// ============================================================
+
 uint32_t Port_GetTick(void) {
-    return GetTick(); 
+    return OSAL_GetTick(); // 调用 System/Delay.h
 }
 
-void Port_ReInitUart(uint32_t baudrate) {
-    USART_InitTypeDef USART_InitStructure;
-    USART_InitStructure.USART_BaudRate = baudrate;
-    USART_InitStructure.USART_WordLength = USART_WordLength_8b;
-    USART_InitStructure.USART_StopBits = USART_StopBits_1;
-    USART_InitStructure.USART_Parity = USART_Parity_No;
-    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
-    USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
-    USART_Init(USART3, &USART_InitStructure);
+uint32_t Port_GetRandomSeed(void) {
+    // 简单的 ADC 悬空采样
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1 | RCC_APB2Periph_GPIOA, ENABLE);
+    RCC_ADCCLKConfig(RCC_PCLK2_Div6); 
     
-    // [关键] 重新初始化 UART 后，必须再次使能 DMA 请求！
-    // 否则 DMA 将永远收不到 UART 的请求信号，导致发送卡死。
-    USART_DMACmd(USART3, USART_DMAReq_Rx | USART_DMAReq_Tx, ENABLE);
+    GPIO_InitTypeDef GPIO_InitStructure;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
     
-    USART_Cmd(USART3, ENABLE);
+    ADC_InitTypeDef ADC_InitStructure;
+    ADC_InitStructure.ADC_Mode = ADC_Mode_Independent;
+    ADC_InitStructure.ADC_ScanConvMode = DISABLE;
+    ADC_InitStructure.ADC_ContinuousConvMode = DISABLE;
+    ADC_InitStructure.ADC_ExternalTrigConv = ADC_ExternalTrigConv_None;
+    ADC_InitStructure.ADC_DataAlign = ADC_DataAlign_Right;
+    ADC_InitStructure.ADC_NbrOfChannel = 1;
+    ADC_Init(ADC1, &ADC_InitStructure);
+    
+    ADC_Cmd(ADC1, ENABLE);
+    ADC_ResetCalibration(ADC1);
+    while(ADC_GetResetCalibrationStatus(ADC1));
+    ADC_StartCalibration(ADC1);
+    while(ADC_GetCalibrationStatus(ADC1));
+    
+    uint32_t seed = 0;
+    for(int i=0; i<32; i++) {
+        ADC_RegularChannelConfig(ADC1, ADC_Channel_0, 1, ADC_SampleTime_1Cycles5);
+        ADC_SoftwareStartConvCmd(ADC1, ENABLE);
+        while(!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC));
+        if (ADC_GetConversionValue(ADC1) & 0x01) seed |= (1 << i);
+    }
+    ADC_Cmd(ADC1, DISABLE);
+    
+    if (seed == 0) seed = OSAL_GetTick() ^ 0x5A5A5A5A;
+    return seed;
 }
 
-// --- 中断服务函数 ---
+// ============================================================
+//                    5. 中断服务函数
+// ============================================================
 
 // DMA TX 完成
 void DMA1_Channel2_IRQHandler(void) {
@@ -224,37 +281,4 @@ void EXTI9_5_IRQHandler(void) {
         s_IsAuxBusy = (GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5) == 1);
         EXTI_ClearITPendingBit(EXTI_Line5);
     }
-}
-
-// 随机数种子 (ADC悬空)
-uint32_t Port_GetRandomSeed(void) {
-    RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1 | RCC_APB2Periph_GPIOA, ENABLE);
-    RCC_ADCCLKConfig(RCC_PCLK2_Div6); 
-    GPIO_InitTypeDef GPIO_InitStructure;
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;
-    GPIO_Init(GPIOA, &GPIO_InitStructure);
-    ADC_InitTypeDef ADC_InitStructure;
-    ADC_InitStructure.ADC_Mode = ADC_Mode_Independent;
-    ADC_InitStructure.ADC_ScanConvMode = DISABLE;
-    ADC_InitStructure.ADC_ContinuousConvMode = DISABLE;
-    ADC_InitStructure.ADC_ExternalTrigConv = ADC_ExternalTrigConv_None;
-    ADC_InitStructure.ADC_DataAlign = ADC_DataAlign_Right;
-    ADC_InitStructure.ADC_NbrOfChannel = 1;
-    ADC_Init(ADC1, &ADC_InitStructure);
-    ADC_Cmd(ADC1, ENABLE);
-    ADC_ResetCalibration(ADC1);
-    while(ADC_GetResetCalibrationStatus(ADC1));
-    ADC_StartCalibration(ADC1);
-    while(ADC_GetCalibrationStatus(ADC1));
-    uint32_t seed = 0;
-    for(int i=0; i<32; i++) {
-        ADC_RegularChannelConfig(ADC1, ADC_Channel_0, 1, ADC_SampleTime_1Cycles5);
-        ADC_SoftwareStartConvCmd(ADC1, ENABLE);
-        while(!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC));
-        if (ADC_GetConversionValue(ADC1) & 0x01) seed |= (1 << i);
-    }
-    ADC_Cmd(ADC1, DISABLE);
-    if (seed == 0) seed = GetTick() ^ 0x5A5A5A5A;
-    return seed;
 }

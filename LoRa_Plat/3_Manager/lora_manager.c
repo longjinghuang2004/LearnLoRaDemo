@@ -1,7 +1,12 @@
 #include "lora_manager.h"
 #include "lora_driver.h"
 #include "lora_port.h"
-#include "Serial.h"
+
+
+//#include "Serial.h"
+
+#include "lora_osal.h"
+
 #include <string.h>
 
 // 协议常量
@@ -41,7 +46,7 @@ static void Manager_ResetState(void) {
 static bool _PhySend(uint8_t *data, uint16_t len) {
     if (Drv_AsyncSend(data, len)) {
         g_LoRaManager.state = MGR_STATE_TX_RUNNING;
-        g_LoRaManager.state_tick = Port_GetTick();
+        g_LoRaManager.state_tick = OSAL_GetTick();
         return true;
     }
     return false;
@@ -55,7 +60,7 @@ static void _PrepareAck(uint16_t target_id, uint8_t seq) {
     
     // 进入延时状态
     g_LoRaManager.state = MGR_STATE_ACK_DELAY;
-    g_LoRaManager.state_tick = Port_GetTick();
+    g_LoRaManager.state_tick = OSAL_GetTick();
 }
 
 // 实际发送 ACK
@@ -96,7 +101,7 @@ static void _SendPendingAck(void) {
     ack_buf[idx++] = PROTOCOL_TAIL_0;
     ack_buf[idx++] = PROTOCOL_TAIL_1;
     
-    Serial_HexDump("[MGR] TX ACK", ack_buf, idx);
+    LORA_HEXDUMP("[MGR] TX ACK", ack_buf, idx);
 		
     g_LoRaManager.is_sending_ack = true; // 标记为 ACK,markB		
 		
@@ -143,7 +148,7 @@ static void Manager_ProcessRx(void) {
                     if (crc_ok) {
                         if (ctrl & CTRL_MASK_TYPE) { // ACK
                             if (g_LoRaManager.state == MGR_STATE_WAIT_ACK) {
-                                Serial_Printf("[MGR] ACK Recv from %d\r\n", src);
+                                LORA_LOG("[MGR] ACK Recv from %d\r\n", src);
                                 if (g_LoRaManager.cb_on_tx) g_LoRaManager.cb_on_tx(true);
                                 Manager_ResetState();
                             }
@@ -224,7 +229,7 @@ bool Manager_SendPacket(const uint8_t *payload, uint16_t len, uint16_t target_id
     p[idx++] = PROTOCOL_TAIL_1;
     
     s_CurrentTxLen = idx;
-    Serial_HexDump("[MGR] TX RAW", p, idx);
+    LORA_HEXDUMP("[MGR] TX RAW", p, idx);
     
     g_LoRaManager.is_sending_ack = false; // 标记为普通数据,markA
 		
@@ -237,12 +242,12 @@ bool Manager_SendPacket(const uint8_t *payload, uint16_t len, uint16_t target_id
 }
 
 void Manager_Run(void) {
-    uint32_t now = Port_GetTick();
+    uint32_t now = OSAL_GetTick();
     
     // 1. RX 处理
     uint16_t read = Drv_Read(&g_LoRaManager.RxBuffer[g_LoRaManager.rx_len], MGR_RX_BUF_SIZE - g_LoRaManager.rx_len);
     if (read > 0) {
-        Serial_HexDump("[MGR] RX RAW", &g_LoRaManager.RxBuffer[g_LoRaManager.rx_len], read);
+        LORA_HEXDUMP("[MGR] RX RAW", &g_LoRaManager.RxBuffer[g_LoRaManager.rx_len], read);
         g_LoRaManager.rx_len += read;
         Manager_ProcessRx();
     }
@@ -293,7 +298,7 @@ void Manager_Run(void) {
             if (now - g_LoRaManager.state_tick > LORA_ACK_TIMEOUT_MS) {
                 if (g_LoRaManager.retry_cnt < LORA_MAX_RETRY) {
                     g_LoRaManager.retry_cnt++;
-                    Serial_Printf("[MGR] Retry %d\r\n", g_LoRaManager.retry_cnt);
+                    LORA_LOG("[MGR] Retry %d\r\n", g_LoRaManager.retry_cnt);
                     if (_PhySend(g_LoRaManager.TxBuffer, s_CurrentTxLen)) {
                         // 重传成功启动
                     } else {

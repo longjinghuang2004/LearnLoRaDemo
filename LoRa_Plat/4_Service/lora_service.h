@@ -1,6 +1,7 @@
 #ifndef __LORA_SERVICE_H
 #define __LORA_SERVICE_H
 
+#include "lora_osal.h"
 #include "LoRaPlatConfig.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -37,7 +38,7 @@ typedef struct {
     void (*LoadConfig)(LoRa_Config_t *cfg);
     
     // --- 硬件能力接口 (必须实现) ---
-    uint32_t (*GetTick)(void);
+	//uint32_t (*OSAL_GetTick)(void);//不再内部调度管理时间，而是从系统环境读取
     uint32_t (*GetRandomSeed)(void);
     void (*SystemReset)(void);
     

@@ -1,7 +1,10 @@
 #include "lora_driver.h"
 #include "lora_port.h"
-#include "Delay.h"
-#include "Serial.h"
+//#include "Delay.h"
+//#include "Serial.h"
+
+#include "lora_osal.h"
+
 #include <string.h>
 #include <stdio.h>
 
@@ -10,18 +13,18 @@ static bool _SendAT(const char *cmd, const char *expect, uint32_t timeout) {
     Port_ClearRxBuffer();
     Port_WriteData((uint8_t*)cmd, strlen(cmd));
     
-    uint32_t start = Port_GetTick();
+    uint32_t start = OSAL_GetTick();
     char rx_buf[128];
     uint16_t rx_idx = 0;
     
-    while (Port_GetTick() - start < timeout) {
+    while (OSAL_GetTick() - start < timeout) {
         uint8_t byte;
         if (Port_ReadData(&byte, 1) > 0) {
             rx_buf[rx_idx++] = byte;
             if (rx_idx >= 127) rx_idx = 127;
             rx_buf[rx_idx] = '\0';
             if (strstr(rx_buf, expect)) {
-                Delay_ms(20); // 稍作延时确保模块处理完毕
+                OSAL_DelayMs(20); // 稍作延时确保模块处理完毕
                 Port_ClearRxBuffer();
                 return true;
             }
@@ -32,16 +35,16 @@ static bool _SendAT(const char *cmd, const char *expect, uint32_t timeout) {
 
 // --- 救砖逻辑 ---
 static bool _Unbrick(void) {
-    Serial_Printf("[DRV] Unbricking...\r\n");
+    LORA_LOG("[DRV] Unbricking...\r\n");
     
     // 1. 尝试 9600
     Port_ReInitUart(9600);
-    Delay_ms(100);
+    OSAL_DelayMs(100);
     if (_SendAT("AT\r\n", "OK", 200)) {
         // 2. 强制改回 115200
         if (_SendAT("AT+UART=7,0\r\n", "OK", 500)) {
             Port_ReInitUart(115200);
-            Delay_ms(100);
+            OSAL_DelayMs(100);
             if (_SendAT("AT\r\n", "OK", 200)) return true;
         }
     }
@@ -58,7 +61,7 @@ bool Drv_Init(const LoRa_Config_t *cfg) {
     
     // 1. 进入配置模式
     Port_SetMD0(true);
-    Delay_ms(600); // 等待模式切换稳定
+    OSAL_DelayMs(600); // 等待模式切换稳定
     
     bool link_ok = false;
     
@@ -68,7 +71,7 @@ bool Drv_Init(const LoRa_Config_t *cfg) {
             link_ok = true;
             break;
         }
-        Serial_Printf("[DRV] Handshake Fail %d/3\r\n", i+1);
+        LORA_LOG("[DRV] Handshake Fail %d/3\r\n", i+1);
     }
     
     // 3. 救砖尝试
@@ -77,7 +80,7 @@ bool Drv_Init(const LoRa_Config_t *cfg) {
     }
     
     if (!link_ok) {
-        Serial_Printf("[DRV] Fatal: Module Dead!\r\n");
+        LORA_LOG("[DRV] Fatal: Module Dead!\r\n");
         return false;
     }
     
@@ -98,7 +101,7 @@ bool Drv_Init(const LoRa_Config_t *cfg) {
     
     // 5. 退出配置模式
     Port_SetMD0(false);
-    Delay_ms(600); 
+    OSAL_DelayMs(600); 
     while(Port_GetAUX_Raw()); // 等待 AUX 变低
     
     // [关键修复] 强制同步 AUX 状态，消除初始化残留

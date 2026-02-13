@@ -2,7 +2,11 @@
 #include "lora_manager.h"
 #include "lora_driver.h" 
 #include "lora_port.h" 
-#include "Serial.h"
+
+//#include "Serial.h"
+
+#include "lora_osal.h"
+
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -77,7 +81,7 @@ static void _On_Mgr_TxResult(bool success) {
 static void _On_Mgr_Error(LoRaError_t err) {
     // 这里可以将错误码转换为事件通知 App
     // 目前简化处理，仅在调试日志中体现
-    Serial_Printf("[SVC] Mgr Error: %d\r\n", err);
+    LORA_LOG("[SVC] Mgr Error: %d\r\n", err);
 }
 
 static void _Svc_NotifyEvent(LoRa_Event_t event, void *arg) {
@@ -102,7 +106,7 @@ void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_i
     
     // 2. 首次上电初始化 (默认参数)
     if (g_LoRaConfig_Current.magic != LORA_CFG_MAGIC) {
-        Serial_Printf("[SVC] Config Invalid, Resetting to Default...\r\n");
+        LORA_LOG("[SVC] Config Invalid, Resetting to Default...\r\n");
         if (g_cb.GetRandomSeed) srand(g_cb.GetRandomSeed());
         g_LoRaConfig_Current.uuid = ((uint32_t)rand() << 16) | rand();
         
@@ -132,15 +136,15 @@ void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_i
     Manager_Init(_On_Mgr_RxData, _On_Mgr_TxResult, _On_Mgr_Error); 
     
     // 5. 初始化 Driver (驱动层 - 阻塞式，含救砖)
-    Serial_Printf("[SVC] Init Driver (Blocking)...\r\n");
+    LORA_LOG("[SVC] Init Driver (Blocking)...\r\n");
     
     // 这里会阻塞 1-3 秒，直到硬件握手成功
     if (Drv_Init(&g_LoRaConfig_Current)) {
-        Serial_Printf("[SVC] Driver Init OK\r\n");
+        LORA_LOG("[SVC] Driver Init OK\r\n");
         Port_ClearRxBuffer(); // 清空初始化过程中的残留数据
         _Svc_NotifyEvent(LORA_EVENT_INIT_SUCCESS, NULL);
     } else {
-        Serial_Printf("[SVC] Driver Init FAIL! System Halted.\r\n");
+        LORA_LOG("[SVC] Driver Init FAIL! System Halted.\r\n");
         // 初始化失败，死循环闪灯报警 (SOS模式)
         // 实际项目中可能需要看门狗复位
         while(1) {
@@ -156,8 +160,8 @@ void LoRa_Service_Run(void) {
     
     // 2. 配置模式超时检查
     if (s_State == SVC_STATE_CONFIGURING) {
-        if (g_cb.GetTick && (g_cb.GetTick() - s_ConfigTimeoutTick > CONFIG_TIMEOUT_MS)) {
-            Serial_Printf("[SVC] Config Timeout, Abort.\r\n");
+        if ((OSAL_GetTick() - s_ConfigTimeoutTick > CONFIG_TIMEOUT_MS)) {
+            LORA_LOG("[SVC] Config Timeout, Abort.\r\n");
             _Svc_AbortConfig();
         }
     }
@@ -171,7 +175,7 @@ bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id) {
 }
 
 void LoRa_Service_FactoryReset(void) {
-    Serial_Printf("[SVC] Factory Reset Triggered.\r\n");
+    LORA_LOG("[SVC] Factory Reset Triggered.\r\n");
     _Svc_NotifyEvent(LORA_EVENT_FACTORY_RESET, NULL);
     
     g_LoRaConfig_Current.magic = 0x00; // 破坏 Magic
@@ -191,7 +195,7 @@ static void _Svc_ProcessPlatformCmd(char *cmd_str) {
 
     if (cmd == NULL) return;
 
-    Serial_Printf("[SVC] Platform Cmd: %s\r\n", cmd);
+    LORA_LOG("[SVC] Platform Cmd: %s\r\n", cmd);
 
     // 1. BIND 指令: CMD:BIND=<uuid>,<new_id>
     if (strcmp(cmd, "BIND") == 0 && params != NULL) {
@@ -250,7 +254,7 @@ static void _Svc_ProcessPlatformCmd(char *cmd_str) {
 
 static void _Svc_EnterConfigMode(uint32_t token) {
     s_State = SVC_STATE_CONFIGURING;
-    if (g_cb.GetTick) s_ConfigTimeoutTick = g_cb.GetTick();
+    s_ConfigTimeoutTick = OSAL_GetTick();
     // 备份当前配置到 Pending
     memcpy(&g_LoRaConfig_Pending, &g_LoRaConfig_Current, sizeof(LoRa_Config_t));
     _Svc_NotifyEvent(LORA_EVENT_CONFIG_START, NULL);

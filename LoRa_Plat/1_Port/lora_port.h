@@ -7,15 +7,16 @@
 // ============================================================
 //                    1. 硬件配置宏
 // ============================================================
-#define LORA_UART_BAUDRATE  115200
+// 波特率定义 (如果不同平台波特率不同，可移至具体实现文件或Config)
+//#define LORA_UART_BAUDRATE  115200
 
 // ============================================================
-//                    2. 核心接口
+//                    2. 核心接口 (API)
 // ============================================================
 
 /**
  * @brief  端口初始化 (GPIO, UART, DMA, NVIC, EXTI)
- * @note   配置 PA5(AUX) 为双边沿中断
+ * @note   具体实现由 lora_port_xxx.c 决定
  */
 void Port_Init(void);
 
@@ -34,13 +35,11 @@ bool Port_GetAUX_Raw(void);
 /**
  * @brief  获取 AUX 的逻辑忙闲状态 (由中断维护)
  * @return true=Busy, false=Idle
- * @note   这是非阻塞查询的首选接口
  */
 bool Port_IsAuxBusy(void);
 
 /**
  * @brief  强制同步 AUX 状态 (消除初始化残留)
- * @note   在 Drv_Init 结束时调用
  */
 void Port_SyncAuxState(void);
 
@@ -72,7 +71,7 @@ void Port_ClearRxBuffer(void);
 uint32_t Port_GetTick(void);
 
 /**
- * @brief  获取随机数种子 (ADC悬空)
+ * @brief  获取随机数种子 (ADC悬空或其他熵源)
  */
 uint32_t Port_GetRandomSeed(void);
 
