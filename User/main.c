@@ -43,7 +43,7 @@ uint32_t Adapter_GetTick(void) {
 }
 
 uint32_t Adapter_GetRandomSeed(void) {
-    return Port_GetEntropy32FromADC(); 
+	return Port_GetEntropy32FromADC(); //目前简单的以adc熵值作为随机数种子
 }
 
 void Adapter_SystemReset(void) {
@@ -57,25 +57,25 @@ void Adapter_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa
     Serial_Printf("[APP] RX from ID:0x%04X | Len:%d | Payload: %s\r\n", src_id, len, data);
     
     if (strstr((const char*)data, "LED_ON")) {
-        LED1_ON(); 
+        LED2_ON(); 
         Serial_Printf("    -> Action: LED ON\r\n");
     } else if (strstr((const char*)data, "LED_OFF")) {
-        LED1_OFF();
+        LED2_OFF();
         Serial_Printf("    -> Action: LED OFF\r\n");
     }
 
 #if (TEST_ROLE == 2)
     // 自动回响 (Echo)
-    if (src_id != 0xFFFF) {
-        char reply[64];
-        snprintf(reply, 64, "Echo: %s", data);
-        // 注意：这里调用的是 LoRa_Service_Send
-        if (!LoRa_Service_Send((uint8_t*)reply, strlen(reply), src_id)) {
-            Serial_Printf("[APP] Echo Failed: System Busy\r\n");
-        } else {
-            Serial_Printf("[APP] Echo Sent\r\n");
-        }
-    }
+//    if (src_id != 0xFFFF) {
+//        char reply[64];
+//        snprintf(reply, 64, "Echo: %s", data);
+//        // 注意：这里调用的是 LoRa_Service_Send
+//        if (!LoRa_Service_Send((uint8_t*)reply, strlen(reply), src_id)) {
+//            Serial_Printf("[APP] Echo Failed: System Busy\r\n");
+//        } else {
+//            Serial_Printf("[APP] Echo Sent\r\n");
+//        }
+//    }
 #endif
 }
 
@@ -99,7 +99,7 @@ void Adapter_OnEvent(LoRa_Event_t event, void *arg) {
             break;
             
         case LORA_EVENT_MSG_RECEIVED: // 修正宏名称
-            LED2_Turn();
+            //LED2_Turn();
             break;
             
         case LORA_EVENT_BIND_SUCCESS: // 修正宏名称

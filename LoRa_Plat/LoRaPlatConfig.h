@@ -9,7 +9,9 @@
 //                    0. 原port层参数配置
 // ============================================================
 
-#define LORA_UART_BAUDRATE  115200
+// [删除] #define LORA_UART_BAUDRATE  115200
+// [新增] 如下：
+#define LORA_TARGET_BAUDRATE    9600  // 目标通信波特率
 
 
 

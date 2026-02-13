@@ -16,9 +16,10 @@
 
 /**
  * @brief  端口初始化 (GPIO, UART, DMA, NVIC, EXTI)
+ * @param  initial_baudrate: 初始化的串口波特率
  * @note   具体实现由 lora_port_xxx.c 决定
  */
-void Port_Init(void);
+void Port_Init(uint32_t initial_baudrate);
 
 /**
  * @brief  设置 MD0 引脚电平
@@ -87,5 +88,7 @@ uint32_t Port_GetEntropy32FromADC(void);
  * @brief  临时修改 UART 波特率 (用于救砖)
  */
 void Port_ReInitUart(uint32_t baudrate);
+
+
 
 #endif // __LORA_PORT_H

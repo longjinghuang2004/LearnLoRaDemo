@@ -25,7 +25,7 @@ static volatile bool s_IsAuxBusy = false; // 由 EXTI 维护
 //                    1. 初始化与配置
 // ============================================================
 
-void Port_Init(void)
+void Port_Init(uint32_t initial_baudrate)
 {
     // 1. 时钟使能
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB | RCC_APB2Periph_GPIOA | RCC_APB2Periph_AFIO, ENABLE);
@@ -57,7 +57,7 @@ void Port_Init(void)
     GPIO_Init(GPIOA, &GPIO_InitStructure);
 
     // 3. USART3 配置
-    Port_ReInitUart(LORA_UART_BAUDRATE);
+    Port_ReInitUart(initial_baudrate); 
 
     // 4. DMA RX (Circular) -> DMA1_Channel3
     DMA_DeInit(DMA1_Channel3);
