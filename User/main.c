@@ -43,7 +43,7 @@ uint32_t Adapter_GetTick(void) {
 }
 
 uint32_t Adapter_GetRandomSeed(void) {
-    return Port_GetRandomSeed(); 
+    return Port_GetEntropy32FromADC(); 
 }
 
 void Adapter_SystemReset(void) {

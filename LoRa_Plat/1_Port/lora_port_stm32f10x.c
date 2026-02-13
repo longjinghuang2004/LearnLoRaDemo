@@ -224,7 +224,7 @@ uint32_t Port_GetTick(void) {
     return OSAL_GetTick(); // 调用 System/Delay.h
 }
 
-uint32_t Port_GetRandomSeed(void) {
+uint32_t Port_GetEntropy32FromADC(void) {
     // 简单的 ADC 悬空采样
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1 | RCC_APB2Periph_GPIOA, ENABLE);
     RCC_ADCCLKConfig(RCC_PCLK2_Div6); 

@@ -2,9 +2,7 @@
 #include "lora_driver.h"
 #include "lora_port.h"
 
-
 //#include "Serial.h"
-
 #include "lora_osal.h"
 
 #include <string.h>

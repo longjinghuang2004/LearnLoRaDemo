@@ -65,15 +65,23 @@ uint16_t Port_ReadData(uint8_t *buf, uint16_t max_len);
  */
 void Port_ClearRxBuffer(void);
 
-/**
- * @brief  获取系统毫秒数
- */
-uint32_t Port_GetTick(void);
+///**
+// * @brief  获取系统毫秒数
+// * @note 已经不再需要。tick的获取从osal获取
+// */
+//uint32_t Port_GetTick(void);
 
 /**
  * @brief  获取随机数种子 (ADC悬空或其他熵源)
  */
-uint32_t Port_GetRandomSeed(void);
+//uint32_t Port_GetRandomSeed(void);
+
+/**
+ * @brief  从空悬adc获得熵源)
+ */
+uint32_t Port_GetEntropy32FromADC(void);
+
+
 
 /**
  * @brief  临时修改 UART 波特率 (用于救砖)
