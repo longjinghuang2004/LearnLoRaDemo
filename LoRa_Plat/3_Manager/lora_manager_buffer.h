@@ -2,7 +2,7 @@
   ******************************************************************************
   * @file    lora_manager_buffer.h
   * @author  LoRaPlat Team
-  * @brief   LoRa 收发缓冲区管理接口
+  * @brief   LoRa 收发缓冲区管理接口 (双队列策略 + 线程安全)
   ******************************************************************************
   */
 
@@ -18,20 +18,20 @@
 // ============================================================
 
 /**
- * @brief  初始化收发缓冲区
+ * @brief  初始化收发缓冲区 (Tx Ring, Ack Ring, Rx Ring)
  */
 void LoRa_Manager_Buffer_Init(void);
 
 // ============================================================
-//                    2. 发送队列 (TX Queue)
+//                    2. 普通发送队列 (Tx Queue)
 // ============================================================
 
 /**
- * @brief  将数据包推入发送队列
+ * @brief  将普通数据包推入发送队列 (线程安全)
  * @param  packet: 待发送的数据包结构体
  * @param  tmode: 传输模式
  * @param  channel: 信道
- * @param  scratch_buf: 外部传入的共享缓冲区
+ * @param  scratch_buf: 外部传入的栈缓冲区 (用于序列化)
  * @param  scratch_len: 缓冲区长度
  * @return true=成功入队, false=队列满
  */
@@ -39,14 +39,12 @@ bool LoRa_Manager_Buffer_PushTx(const LoRa_Packet_t *packet, uint8_t tmode, uint
                                 uint8_t *scratch_buf, uint16_t scratch_len);
 
 /**
- * @brief  检查发送队列是否有数据
- * @return true=有数据, false=空
+ * @brief  检查普通发送队列是否有数据
  */
-// 【关键修复】之前可能漏掉了这一行声明
 bool LoRa_Manager_Buffer_HasTxData(void);
 
 /**
- * @brief  从发送队列头部预览数据 (Peek)
+ * @brief  从普通发送队列头部预览数据 (Peek)
  * @param  scratch_buf: 输出缓冲区
  * @param  scratch_len: 缓冲区大小
  * @return 数据长度
@@ -54,13 +52,39 @@ bool LoRa_Manager_Buffer_HasTxData(void);
 uint16_t LoRa_Manager_Buffer_PeekTx(uint8_t *scratch_buf, uint16_t scratch_len);
 
 /**
- * @brief  从发送队列移除已发送的数据 (Pop)
+ * @brief  从普通发送队列移除已发送的数据 (Pop) (线程安全)
  * @param  len: 要移除的长度
  */
 void LoRa_Manager_Buffer_PopTx(uint16_t len);
 
 // ============================================================
-//                    3. 接收处理 (RX Buffer)
+//                    3. ACK 高优先级队列 (Ack Queue)
+// ============================================================
+
+/**
+ * @brief  将 ACK 包推入高优先级队列 (线程安全)
+ * @note   ACK 包通常很小 (<20字节)，且必须优先发送
+ */
+bool LoRa_Manager_Buffer_PushAck(const LoRa_Packet_t *packet, uint8_t tmode, uint8_t channel, 
+                                 uint8_t *scratch_buf, uint16_t scratch_len);
+
+/**
+ * @brief  检查 ACK 队列是否有数据
+ */
+bool LoRa_Manager_Buffer_HasAckData(void);
+
+/**
+ * @brief  从 ACK 队列头部预览数据
+ */
+uint16_t LoRa_Manager_Buffer_PeekAck(uint8_t *scratch_buf, uint16_t scratch_len);
+
+/**
+ * @brief  从 ACK 队列移除数据 (线程安全)
+ */
+void LoRa_Manager_Buffer_PopAck(uint16_t len);
+
+// ============================================================
+//                    4. 接收处理 (RX Buffer)
 // ============================================================
 
 /**
@@ -74,7 +98,7 @@ uint16_t LoRa_Manager_Buffer_PullFromPort(void);
  * @param  packet: 输出结构体
  * @param  local_id: 本地 ID
  * @param  group_id: 组 ID
- * @param  scratch_buf: 外部传入的共享缓冲区
+ * @param  scratch_buf: 外部传入的共享缓冲区 (RX Workspace)
  * @param  scratch_len: 缓冲区长度
  * @return true=解析成功, false=无完整包
  */

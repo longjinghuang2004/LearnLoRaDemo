@@ -140,12 +140,12 @@ bool LoRa_Port_GetAUX(void) {
 }
 
 void LoRa_Port_SyncAuxState(void) {
-    OSAL_EnterCritical();
+    uint32_t primask = OSAL_EnterCritical();
     // 强制复位 DMA 硬件状态
     DMA_Cmd(DMA1_Channel2, DISABLE);
     DMA1_Channel2->CNDTR = 0;
     s_TxDmaBusy = false;
-    OSAL_ExitCritical();
+    OSAL_ExitCritical(primask);
 }
 
 // ============================================================
@@ -159,12 +159,13 @@ bool LoRa_Port_IsTxBusy(void) {
 uint16_t LoRa_Port_TransmitData(const uint8_t *data, uint16_t len) {
     if (len == 0 || len > PORT_DMA_TX_BUF_SIZE) return 0;
 
-    OSAL_EnterCritical();
+    // 【关键修改】声明变量 primask 并接收返回值
+    uint32_t primask = OSAL_EnterCritical();
 
     // [关键修复] 双重检查：软件标志 + 硬件计数器
     // 防止上层在 IsTxBusy 返回 false 后，硬件尚未完全就绪的微小间隙
     if (s_TxDmaBusy || DMA_GetCurrDataCounter(DMA1_Channel2) != 0) {
-        OSAL_ExitCritical();
+        OSAL_ExitCritical(primask);
         return 0; // 忙，拒绝发送
     }
 
@@ -179,7 +180,7 @@ uint16_t LoRa_Port_TransmitData(const uint8_t *data, uint16_t len) {
     DMA1_Channel2->CNDTR = len;
     DMA_Cmd(DMA1_Channel2, ENABLE);
     
-    OSAL_ExitCritical();
+    OSAL_ExitCritical(primask);
     
     return len;
 }

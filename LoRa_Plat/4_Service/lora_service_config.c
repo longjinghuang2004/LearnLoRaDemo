@@ -70,12 +70,12 @@ const LoRa_Config_t* LoRa_Service_Config_Get(void) {
 
 void LoRa_Service_Config_Set(const LoRa_Config_t *cfg) {
     if (cfg) {
-        OSAL_EnterCritical();
+        // 【修改】适配新的临界区接口
+        uint32_t primask = OSAL_EnterCritical();
         memcpy(&s_CurrentConfig, cfg, sizeof(LoRa_Config_t));
-        OSAL_ExitCritical();
+        OSAL_ExitCritical(primask);
     }
 }
-
 void LoRa_Service_Config_FactoryReset(void) {
     _LoadDefaults();
     s_CurrentConfig.magic = 0; // 标记为无效，下次上电会重置

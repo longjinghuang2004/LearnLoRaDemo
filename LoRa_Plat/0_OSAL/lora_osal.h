@@ -37,23 +37,41 @@ typedef struct {
 bool LoRa_OSAL_Init(const LoRa_OSAL_Interface_t *impl);
 
 // ============================================================
-//                    3. 业务调用宏
+//                    3. 业务调用宏 (增强版)
 // ============================================================
 
 uint32_t _osal_get_tick(void);
 void     _osal_delay_ms(uint32_t ms);
-void     _osal_enter_critical(void);
-void     _osal_exit_critical(void);
 void*    _osal_malloc(uint32_t size);
 void     _osal_free(void* ptr);
 
+// [新增] 临界区嵌套支持 (Cortex-M3/M4)
+// 使用 __get_PRIMASK() 保存当前中断状态，__set_PRIMASK() 恢复
+// 这样即使在 ISR 中调用，也不会意外开启全局中断
+#if defined(__CC_ARM) || defined(__GNUC__)
+    #include "stm32f10x.h" // 引入 CMSIS 核心头文件
+    
+    static inline uint32_t OSAL_EnterCritical(void) {
+        uint32_t primask = __get_PRIMASK();
+        __disable_irq();
+        return primask;
+    }
+    
+    static inline void OSAL_ExitCritical(uint32_t primask) {
+        __set_PRIMASK(primask);
+    }
+#else
+    // 非 ARM 编译器回退方案 (不支持嵌套)
+    #define OSAL_EnterCritical()    __disable_irq()
+    #define OSAL_ExitCritical(x)    __enable_irq()
+#endif
+
 #define OSAL_GetTick()          _osal_get_tick()
 #define OSAL_DelayMs(ms)        _osal_delay_ms(ms)
-#define OSAL_EnterCritical()    _osal_enter_critical()
-#define OSAL_ExitCritical()     _osal_exit_critical()
 #define OSAL_Malloc(sz)         _osal_malloc(sz)
 #define OSAL_Free(ptr)          _osal_free(ptr)
-
+		
+		
 // --- 日志宏 (编译期优化) ---
 #if (defined(LORA_DEBUG_PRINT) && LORA_DEBUG_PRINT == 1)
     void _osal_log_wrapper(const char *fmt, ...);
