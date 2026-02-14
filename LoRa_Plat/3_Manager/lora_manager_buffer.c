@@ -2,6 +2,9 @@
 #include "lora_ring_buffer.h"
 #include "lora_port.h"
 #include "LoRaPlatConfig.h"
+
+#include "lora_osal.h"
+
 #include <string.h>
 
 #define TX_QUEUE_SIZE   MGR_TX_BUF_SIZE
@@ -68,9 +71,14 @@ uint16_t LoRa_Manager_Buffer_PullFromPort(void) {
     uint8_t temp_buf[64]; 
     uint16_t total_read = 0;
     
+    
     while (1) {
         uint16_t len = LoRa_Port_ReceiveData(temp_buf, sizeof(temp_buf));
         if (len == 0) break;
+        
+        // [新增] 打印接收到的原始数据
+        LORA_HEXDUMP("RX RAW", temp_buf, len);
+        
         LoRa_RingBuffer_Write(&s_RxRing, temp_buf, len);
         total_read += len;
     }

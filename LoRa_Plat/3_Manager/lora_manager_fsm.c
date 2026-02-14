@@ -2,8 +2,10 @@
   ******************************************************************************
   * @file    lora_manager_fsm.c
   * @author  LoRaPlat Team
-  * @brief   LoRa 协议状态机实现 (内存优化版 V3.3)
-  *          移除了内部静态缓冲区，使用外部传入的共享工作区 (Shared Workspace)
+  * @brief   LoRa 协议状态机实现 (V3.4 严格停等协议版)
+  *          1. 修复了发送逻辑，确保在等待 ACK 期间拒绝新数据。
+  *          2. 增加了 HexDump 调试打印。
+  *          3. 使用共享工作区优化内存。
   ******************************************************************************
   */
 
@@ -47,7 +49,9 @@ static void _FSM_Reset(void) {
 
 /**
  * @brief 发送 ACK 包
- * @note  使用外部传入的 scratch_buf 进行序列化，避免栈溢出
+ * @note  ACK 包也是一种数据包，通过 Buffer 机制发送。
+ *        调用此函数后，ACK 被推入队列，状态机切回 IDLE，
+ *        Run 函数会在下一次循环中将其发出。
  */
 static void _FSM_SendAck(uint8_t *scratch_buf, uint16_t scratch_len) {
     LoRa_Packet_t pkt;
@@ -56,7 +60,7 @@ static void _FSM_SendAck(uint8_t *scratch_buf, uint16_t scratch_len) {
     memset(&pkt, 0, sizeof(pkt));
     
     pkt.IsAckPacket = true;
-    pkt.NeedAck = false;
+    pkt.NeedAck = false; // ACK 包本身不需要 ACK
     pkt.HasCrc = LORA_ENABLE_CRC;
     pkt.TargetID = s_FSM.ack_ctx.target_id;
     pkt.SourceID = LoRa_Service_GetConfig()->net_id;
@@ -81,11 +85,21 @@ void LoRa_Manager_FSM_Init(void) {
 
 bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target_id,
                            uint8_t *scratch_buf, uint16_t scratch_len) {
+    
+    // 【关键修复】严格停等协议检查
+    // 如果状态机不为空闲（例如正在等待上一包的 ACK），则拒绝发送新数据。
+    // 这样保证了上层业务逻辑必须等待底层传输完成。
+    if (s_FSM.state != LORA_FSM_IDLE) {
+        LORA_LOG("[MGR] Send Reject: Busy (State %d)\r\n", s_FSM.state);
+        return false; 
+    }
+
     LoRa_Packet_t pkt;
     memset(&pkt, 0, sizeof(pkt));
     
     pkt.IsAckPacket = false;
-    pkt.NeedAck = LORA_ENABLE_ACK; // 根据配置决定是否需要 ACK
+    // 广播包 (0xFFFF) 不需要 ACK，否则会导致信道风暴
+    pkt.NeedAck = (LORA_ENABLE_ACK && target_id != 0xFFFF); 
     pkt.HasCrc = LORA_ENABLE_CRC;
     pkt.TargetID = target_id;
     pkt.SourceID = LoRa_Service_GetConfig()->net_id;
@@ -98,26 +112,18 @@ bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target
     
     const LoRa_Config_t *cfg = LoRa_Service_GetConfig();
     
-    // 尝试推入队列，使用共享缓冲区进行序列化
-    if (LoRa_Manager_Buffer_PushTx(&pkt, cfg->tmode, cfg->channel, scratch_buf, scratch_len)) {
-        // 如果需要 ACK，且不是广播包，则进入等待状态
-        // 注意：目前简化逻辑，只要入队成功就认为发送流程开始
-        // 真正的状态切换在 Run 函数中处理物理发送后进行会更严谨，
-        // 但为了简化，我们假设入队即发送。
-        // TODO: 完善重传逻辑 (Phase 2)
-        return true;
-    }
-    
-    return false;
+    // 尝试推入队列
+    // 注意：这里返回 true 仅代表入队成功，实际发送由 Run 函数调度
+    return LoRa_Manager_Buffer_PushTx(&pkt, cfg->tmode, cfg->channel, scratch_buf, scratch_len);
 }
 
 void LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet) {
     // 1. 如果是 ACK 包
     if (packet->IsAckPacket) {
         if (s_FSM.state == LORA_FSM_WAIT_ACK) {
-            // 简单校验：ACK 的 Seq 应该等于我们发的 Seq (这里简化处理)
+            // 简单校验：ACK 的 Seq 应该等于我们发的 Seq (这里简化处理，Phase 2 可增强)
             // 只要收到 ACK 就认为成功，复位状态机
-            LORA_LOG("[MGR] ACK Recv\r\n");
+            LORA_LOG("[MGR] ACK Recv (Seq %d)\r\n", packet->Sequence);
             _FSM_Reset();
             // TODO: 通知上层发送成功 (Event Callback)
         }
@@ -144,20 +150,48 @@ void LoRa_Manager_FSM_Run(uint8_t *scratch_buf, uint16_t scratch_len) {
     // --------------------------------------------------------
     // 1. 物理层发送调度 (Physical TX Scheduler)
     // --------------------------------------------------------
-    if (LoRa_Manager_Buffer_HasTxData()) {
+    // 【关键修复】只有当状态机处于 IDLE 时，才允许从队列提取新数据发送。
+    // 这确保了如果正在等待 ACK，不会发送下一包数据。
+    if (s_FSM.state == LORA_FSM_IDLE && LoRa_Manager_Buffer_HasTxData()) {
+        
         // 只有当 Port 空闲时才发送
         if (!LoRa_Port_IsTxBusy()) {
-            // 使用共享缓冲区 Peek 数据 (不再定义内部 static 数组)
+            // 使用共享缓冲区 Peek 数据
             uint16_t len = LoRa_Manager_Buffer_PeekTx(scratch_buf, scratch_len);
             
             if (len > 0) {
+                // [新增] 打印发送原始数据 (HexDump)
+                LORA_HEXDUMP("TX RAW", scratch_buf, len);
+
                 // 尝试启动 DMA 发送
                 if (LoRa_Port_TransmitData(scratch_buf, len) > 0) {
                     // 发送成功，从队列移除数据
                     LoRa_Manager_Buffer_PopTx(len);
                     
-                    // 触发发送完成事件 (可选)
-                    // LoRa_Service_NotifyEvent(LORA_EVENT_MSG_SENT, NULL);
+                    // 触发发送完成事件
+                    LoRa_Service_NotifyEvent(LORA_EVENT_MSG_SENT, NULL);
+                    
+                    // 【关键逻辑】检查是否需要进入等待 ACK 状态
+                    // 我们需要解析刚才发出去的包头中的 Ctrl 字节
+                    const LoRa_Config_t *cfg = LoRa_Service_GetConfig();
+                    
+                    // 计算 Ctrl 字节在 buffer 中的偏移量
+                    // TMODE=1 (定点): Target(2)+Chan(1) + Head(2)+Len(1)+Ctrl(1)... -> Ctrl在索引 6
+                    // TMODE=0 (透传): Head(2)+Len(1)+Ctrl(1)... -> Ctrl在索引 3
+                    uint8_t offset = (cfg->tmode == 1) ? 3 : 0;
+                    
+                    // 安全检查防止越界
+                    if (len > offset + 3) {
+                        uint8_t ctrl_byte = scratch_buf[offset + 3];
+                        
+                        // 检查 NeedAck 位 (0x40)
+                        if (ctrl_byte & LORA_CTRL_MASK_NEED_ACK) {
+                            s_FSM.state = LORA_FSM_WAIT_ACK;
+                            s_FSM.timer_start = now;
+                            s_FSM.retry_count = 0;
+                            LORA_LOG("[MGR] Wait ACK...\r\n");
+                        }
+                    }
                 }
             }
         }
@@ -176,7 +210,9 @@ void LoRa_Manager_FSM_Run(uint8_t *scratch_buf, uint16_t scratch_len) {
             if (now - s_FSM.timer_start > LORA_ACK_DELAY_MS) {
                 if (s_FSM.ack_ctx.pending) {
                     _FSM_SendAck(scratch_buf, scratch_len);
+                    LORA_LOG("[MGR] ACK Queued\r\n");
                 }
+                // 发送 ACK 后回到 IDLE，Run 函数的下一次循环会把 ACK 发出去
                 s_FSM.state = LORA_FSM_IDLE;
             }
             break;
@@ -192,7 +228,7 @@ void LoRa_Manager_FSM_Run(uint8_t *scratch_buf, uint16_t scratch_len) {
                     // 目前简化处理：超时直接放弃
                     _FSM_Reset();
                 } else {
-                    LORA_LOG("[MGR] ACK Failed\r\n");
+                    LORA_LOG("[MGR] ACK Failed (Give up)\r\n");
                     _FSM_Reset();
                 }
             }
