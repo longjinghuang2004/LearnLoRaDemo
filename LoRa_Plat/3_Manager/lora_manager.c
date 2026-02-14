@@ -1,10 +1,7 @@
 #include "lora_manager.h"
 #include "lora_driver.h"
 #include "lora_port.h"
-
-//#include "Serial.h"
 #include "lora_osal.h"
-
 #include <string.h>
 
 // 协议常量
@@ -16,11 +13,49 @@
 #define CTRL_MASK_NEED_ACK  0x40 
 #define CTRL_MASK_HAS_CRC   0x20 
 
-// 引入全局配置
-extern LoRa_Config_t g_LoRaConfig_Current; 
+// 状态机状态
+typedef enum {
+    MGR_STATE_IDLE = 0,
+    MGR_STATE_ACK_DELAY,    
+    MGR_STATE_TX_RUNNING,   
+    MGR_STATE_WAIT_ACK,     
+} MgrState_t;
 
-LoRa_Manager_t g_LoRaManager;
+// 内部结构体定义 (私有化)
+typedef struct {
+    uint8_t TxBuffer[MGR_TX_BUF_SIZE];
+    uint8_t RxBuffer[MGR_RX_BUF_SIZE];
+    
+    MgrState_t state;
+    uint32_t   state_tick;  
+    uint8_t    tx_seq;
+    uint8_t    retry_cnt;
+    uint16_t   rx_len;
+    
+    struct {
+        uint16_t target_id;
+        uint8_t  seq;
+        bool     pending;
+    } ack_pending;
+    
+    uint16_t   local_id;
+    uint16_t   group_id;
+    uint32_t   uuid;        
+    
+    OnRxData_t      cb_on_rx;
+    OnTxResult_t    cb_on_tx;
+    OnError_t       cb_on_err;
+		
+    bool     is_sending_ack; 
+} LoRa_Manager_t;
+
+// [修改] static
+static LoRa_Manager_t s_Manager;
 static uint16_t s_CurrentTxLen = 0;
+
+// 引入全局配置 (用于读取 tmode, channel 等)
+// 注意：Service 层已经提供了 GetConfig 接口，这里应该使用接口
+#include "lora_service.h" 
 
 // --- 内部函数 ---
 static uint16_t CRC16_Calc(const uint8_t *data, uint16_t len) {
@@ -36,42 +71,38 @@ static uint16_t CRC16_Calc(const uint8_t *data, uint16_t len) {
 }
 
 static void Manager_ResetState(void) {
-    g_LoRaManager.state = MGR_STATE_IDLE;
-    g_LoRaManager.ack_pending.pending = false;
+    s_Manager.state = MGR_STATE_IDLE;
+    s_Manager.ack_pending.pending = false;
 }
 
-// 触发物理发送
 static bool _PhySend(uint8_t *data, uint16_t len) {
     if (Drv_AsyncSend(data, len)) {
-        g_LoRaManager.state = MGR_STATE_TX_RUNNING;
-        g_LoRaManager.state_tick = OSAL_GetTick();
+        s_Manager.state = MGR_STATE_TX_RUNNING;
+        s_Manager.state_tick = OSAL_GetTick();
         return true;
     }
     return false;
 }
 
-// 构造并发送 ACK (不立即发，只填充 buffer)
 static void _PrepareAck(uint16_t target_id, uint8_t seq) {
-    g_LoRaManager.ack_pending.target_id = target_id;
-    g_LoRaManager.ack_pending.seq = seq;
-    g_LoRaManager.ack_pending.pending = true;
+    s_Manager.ack_pending.target_id = target_id;
+    s_Manager.ack_pending.seq = seq;
+    s_Manager.ack_pending.pending = true;
     
-    // 进入延时状态
-    g_LoRaManager.state = MGR_STATE_ACK_DELAY;
-    g_LoRaManager.state_tick = OSAL_GetTick();
+    s_Manager.state = MGR_STATE_ACK_DELAY;
+    s_Manager.state_tick = OSAL_GetTick();
 }
 
-// 实际发送 ACK
 static void _SendPendingAck(void) {
     uint8_t ack_buf[32];
     uint16_t idx = 0;
-    uint16_t target_id = g_LoRaManager.ack_pending.target_id;
+    uint16_t target_id = s_Manager.ack_pending.target_id;
+    const LoRa_Config_t *cfg = LoRa_Service_GetConfig(); // [修改] 使用接口获取配置
     
-    // 定向头
-    if (g_LoRaConfig_Current.tmode == 1) {
+    if (cfg->tmode == 1) {
         ack_buf[idx++] = (uint8_t)(target_id >> 8);
         ack_buf[idx++] = (uint8_t)(target_id & 0xFF);
-        ack_buf[idx++] = g_LoRaConfig_Current.channel;
+        ack_buf[idx++] = cfg->channel;
     }
 
     ack_buf[idx++] = PROTOCOL_HEAD_0;
@@ -82,15 +113,15 @@ static void _SendPendingAck(void) {
     if (LORA_ENABLE_CRC) ctrl |= CTRL_MASK_HAS_CRC;
     ack_buf[idx++] = ctrl;
     
-    ack_buf[idx++] = g_LoRaManager.ack_pending.seq; 
+    ack_buf[idx++] = s_Manager.ack_pending.seq; 
     
     ack_buf[idx++] = (uint8_t)(target_id & 0xFF);
     ack_buf[idx++] = (uint8_t)(target_id >> 8);
-    ack_buf[idx++] = (uint8_t)(g_LoRaManager.local_id & 0xFF);
-    ack_buf[idx++] = (uint8_t)(g_LoRaManager.local_id >> 8);
+    ack_buf[idx++] = (uint8_t)(s_Manager.local_id & 0xFF);
+    ack_buf[idx++] = (uint8_t)(s_Manager.local_id >> 8);
     
     if (LORA_ENABLE_CRC) {
-        uint16_t crc_start = (g_LoRaConfig_Current.tmode == 1) ? 3 : 0;
+        uint16_t crc_start = (cfg->tmode == 1) ? 3 : 0;
         uint16_t crc = CRC16_Calc(&ack_buf[crc_start + 2], idx - crc_start - 2);
         ack_buf[idx++] = (uint8_t)(crc & 0xFF);
         ack_buf[idx++] = (uint8_t)(crc >> 8);
@@ -101,66 +132,65 @@ static void _SendPendingAck(void) {
     
     LORA_HEXDUMP("[MGR] TX ACK", ack_buf, idx);
 		
-    g_LoRaManager.is_sending_ack = true; // 标记为 ACK,markB		
+    s_Manager.is_sending_ack = true; 
 		
     _PhySend(ack_buf, idx);
     
-    g_LoRaManager.ack_pending.pending = false;
+    s_Manager.ack_pending.pending = false;
 }
 
 static void Manager_ProcessRx(void) {
     uint16_t i = 0;
     uint16_t processed_len = 0;
     
-    while (i + 11 <= g_LoRaManager.rx_len) {
-        if (g_LoRaManager.RxBuffer[i] == PROTOCOL_HEAD_0 && 
-            g_LoRaManager.RxBuffer[i+1] == PROTOCOL_HEAD_1) {
+    while (i + 11 <= s_Manager.rx_len) {
+        if (s_Manager.RxBuffer[i] == PROTOCOL_HEAD_0 && 
+            s_Manager.RxBuffer[i+1] == PROTOCOL_HEAD_1) {
             
-            uint8_t p_len = g_LoRaManager.RxBuffer[i+2];
-            uint8_t ctrl = g_LoRaManager.RxBuffer[i+3];
+            uint8_t p_len = s_Manager.RxBuffer[i+2];
+            uint8_t ctrl = s_Manager.RxBuffer[i+3];
             bool has_crc = (ctrl & CTRL_MASK_HAS_CRC);
             uint16_t pkt_len = 9 + p_len + (has_crc ? 2 : 0) + 2;
             
-            if (i + pkt_len > g_LoRaManager.rx_len) break;
+            if (i + pkt_len > s_Manager.rx_len) break;
             
-            if (g_LoRaManager.RxBuffer[i + pkt_len - 2] == PROTOCOL_TAIL_0 && 
-                g_LoRaManager.RxBuffer[i + pkt_len - 1] == PROTOCOL_TAIL_1) {
+            if (s_Manager.RxBuffer[i + pkt_len - 2] == PROTOCOL_TAIL_0 && 
+                s_Manager.RxBuffer[i + pkt_len - 1] == PROTOCOL_TAIL_1) {
                 
-                uint16_t target = (uint16_t)g_LoRaManager.RxBuffer[i+5] | (g_LoRaManager.RxBuffer[i+6] << 8);
-                uint16_t src    = (uint16_t)g_LoRaManager.RxBuffer[i+7] | (g_LoRaManager.RxBuffer[i+8] << 8);
-                uint8_t  seq    = g_LoRaManager.RxBuffer[i+4];
+                uint16_t target = (uint16_t)s_Manager.RxBuffer[i+5] | (s_Manager.RxBuffer[i+6] << 8);
+                uint16_t src    = (uint16_t)s_Manager.RxBuffer[i+7] | (s_Manager.RxBuffer[i+8] << 8);
+                uint8_t  seq    = s_Manager.RxBuffer[i+4];
                 
-                bool accept = (target == g_LoRaManager.local_id) || 
+                bool accept = (target == s_Manager.local_id) || 
                               (target == 0xFFFF) || 
-                              (g_LoRaManager.group_id != 0 && target == g_LoRaManager.group_id);
+                              (s_Manager.group_id != 0 && target == s_Manager.group_id);
                 
                 if (accept) {
                     bool crc_ok = true;
                     if (has_crc) {
-                        uint16_t calc = CRC16_Calc(&g_LoRaManager.RxBuffer[i+2], pkt_len - 6);
-                        uint16_t recv = (uint16_t)g_LoRaManager.RxBuffer[i + pkt_len - 4] | 
-                                        (g_LoRaManager.RxBuffer[i + pkt_len - 3] << 8);
+                        uint16_t calc = CRC16_Calc(&s_Manager.RxBuffer[i+2], pkt_len - 6);
+                        uint16_t recv = (uint16_t)s_Manager.RxBuffer[i + pkt_len - 4] | 
+                                        (s_Manager.RxBuffer[i + pkt_len - 3] << 8);
                         if (calc != recv) crc_ok = false;
                     }
                     
                     if (crc_ok) {
                         if (ctrl & CTRL_MASK_TYPE) { // ACK
-                            if (g_LoRaManager.state == MGR_STATE_WAIT_ACK) {
+                            if (s_Manager.state == MGR_STATE_WAIT_ACK) {
                                 LORA_LOG("[MGR] ACK Recv from %d\r\n", src);
-                                if (g_LoRaManager.cb_on_tx) g_LoRaManager.cb_on_tx(true);
+                                if (s_Manager.cb_on_tx) s_Manager.cb_on_tx(true);
                                 Manager_ResetState();
                             }
                         } else { // Data
-                            if (g_LoRaManager.cb_on_rx) {
-                                g_LoRaManager.cb_on_rx(&g_LoRaManager.RxBuffer[i+9], p_len, src);
+                            if (s_Manager.cb_on_rx) {
+                                s_Manager.cb_on_rx(&s_Manager.RxBuffer[i+9], p_len, src);
                             }
-                            // 触发 ACK 延时逻辑
                             if ((ctrl & CTRL_MASK_NEED_ACK) && target != 0xFFFF) {
                                 _PrepareAck(src, seq);
                             }
                         }
                     } else {
-                        if (g_LoRaManager.cb_on_err) g_LoRaManager.cb_on_err(LORA_ERR_CRC_FAIL);
+                        if (s_Manager.cb_on_err) s_Manager.cb_on_err(LORA_ERR_CRC_FAIL);
                     }
                 }
                 i += pkt_len;
@@ -170,32 +200,39 @@ static void Manager_ProcessRx(void) {
     }
     
     if (processed_len > 0) {
-        if (processed_len < g_LoRaManager.rx_len) {
-            memmove(g_LoRaManager.RxBuffer, &g_LoRaManager.RxBuffer[processed_len], g_LoRaManager.rx_len - processed_len);
-            g_LoRaManager.rx_len -= processed_len;
-        } else { g_LoRaManager.rx_len = 0; }
+        if (processed_len < s_Manager.rx_len) {
+            memmove(s_Manager.RxBuffer, &s_Manager.RxBuffer[processed_len], s_Manager.rx_len - processed_len);
+            s_Manager.rx_len -= processed_len;
+        } else { s_Manager.rx_len = 0; }
     }
 }
 
 // --- 核心接口 ---
 
 void Manager_Init(OnRxData_t on_rx, OnTxResult_t on_tx, OnError_t on_err) {
-    g_LoRaManager.cb_on_rx = on_rx;
-    g_LoRaManager.cb_on_tx = on_tx;
-    g_LoRaManager.cb_on_err = on_err;
+    s_Manager.cb_on_rx = on_rx;
+    s_Manager.cb_on_tx = on_tx;
+    s_Manager.cb_on_err = on_err;
     Manager_ResetState();
 }
 
+void Manager_SetIdentity(uint16_t local_id, uint16_t group_id, uint32_t uuid) {
+    s_Manager.local_id = local_id;
+    s_Manager.group_id = group_id;
+    s_Manager.uuid = uuid;
+}
+
 bool Manager_SendPacket(const uint8_t *payload, uint16_t len, uint16_t target_id) {
-    if (g_LoRaManager.state != MGR_STATE_IDLE) return false;
+    if (s_Manager.state != MGR_STATE_IDLE) return false;
     
-    uint8_t *p = g_LoRaManager.TxBuffer;
+    uint8_t *p = s_Manager.TxBuffer;
     uint16_t idx = 0;
+    const LoRa_Config_t *cfg = LoRa_Service_GetConfig(); // [修改] 使用接口获取配置
     
-    if (g_LoRaConfig_Current.tmode == 1) {
+    if (cfg->tmode == 1) {
         p[idx++] = (uint8_t)(target_id >> 8);
         p[idx++] = (uint8_t)(target_id & 0xFF);
-        p[idx++] = g_LoRaConfig_Current.channel;
+        p[idx++] = cfg->channel;
     }
     
     p[idx++] = PROTOCOL_HEAD_0;
@@ -207,17 +244,17 @@ bool Manager_SendPacket(const uint8_t *payload, uint16_t len, uint16_t target_id
     if (LORA_ENABLE_CRC) ctrl |= CTRL_MASK_HAS_CRC;
     p[idx++] = ctrl;
     
-    p[idx++] = ++g_LoRaManager.tx_seq;
+    p[idx++] = ++s_Manager.tx_seq;
     p[idx++] = (uint8_t)(target_id & 0xFF);
     p[idx++] = (uint8_t)(target_id >> 8);
-    p[idx++] = (uint8_t)(g_LoRaManager.local_id & 0xFF);
-    p[idx++] = (uint8_t)(g_LoRaManager.local_id >> 8);
+    p[idx++] = (uint8_t)(s_Manager.local_id & 0xFF);
+    p[idx++] = (uint8_t)(s_Manager.local_id >> 8);
     
     memcpy(&p[idx], payload, len);
     idx += len;
     
     if (LORA_ENABLE_CRC) {
-        uint16_t crc_start = (g_LoRaConfig_Current.tmode == 1) ? 3 : 0;
+        uint16_t crc_start = (cfg->tmode == 1) ? 3 : 0;
         uint16_t crc = CRC16_Calc(&p[crc_start + 2], idx - crc_start - 2);
         p[idx++] = (uint8_t)(crc & 0xFF);
         p[idx++] = (uint8_t)(crc >> 8);
@@ -229,11 +266,10 @@ bool Manager_SendPacket(const uint8_t *payload, uint16_t len, uint16_t target_id
     s_CurrentTxLen = idx;
     LORA_HEXDUMP("[MGR] TX RAW", p, idx);
     
-    g_LoRaManager.is_sending_ack = false; // 标记为普通数据,markA
+    s_Manager.is_sending_ack = false; 
 		
-    // 尝试发送
     if (_PhySend(p, idx)) {
-        g_LoRaManager.retry_cnt = 0;
+        s_Manager.retry_cnt = 0;
         return true;
     }
     return false;
@@ -241,73 +277,71 @@ bool Manager_SendPacket(const uint8_t *payload, uint16_t len, uint16_t target_id
 
 void Manager_Run(void) {
     uint32_t now = OSAL_GetTick();
+    const LoRa_Config_t *cfg = LoRa_Service_GetConfig(); // [修改] 使用接口获取配置
     
     // 1. RX 处理
-    uint16_t read = Drv_Read(&g_LoRaManager.RxBuffer[g_LoRaManager.rx_len], MGR_RX_BUF_SIZE - g_LoRaManager.rx_len);
+    uint16_t read = Drv_Read(&s_Manager.RxBuffer[s_Manager.rx_len], MGR_RX_BUF_SIZE - s_Manager.rx_len);
     if (read > 0) {
-        LORA_HEXDUMP("[MGR] RX RAW", &g_LoRaManager.RxBuffer[g_LoRaManager.rx_len], read);
-        g_LoRaManager.rx_len += read;
+        LORA_HEXDUMP("[MGR] RX RAW", &s_Manager.RxBuffer[s_Manager.rx_len], read);
+        s_Manager.rx_len += read;
         Manager_ProcessRx();
     }
     
     // 2. 状态机
-    switch (g_LoRaManager.state) {
+    switch (s_Manager.state) {
         case MGR_STATE_IDLE: break;
             
         case MGR_STATE_ACK_DELAY:
-            // 延时等待发送 ACK
-            if (now - g_LoRaManager.state_tick > LORA_ACK_DELAY_MS) {
+            if (now - s_Manager.state_tick > LORA_ACK_DELAY_MS) {
                 if (!Drv_IsBusy()) {
-                    _SendPendingAck(); // 发送后切到 TX_RUNNING
+                    _SendPendingAck(); 
                 }
-                // 如果忙，下一轮再试，不阻塞
             }
             break;
             
         case MGR_STATE_TX_RUNNING:
             if (!Drv_IsBusy()) {
-                // 发送完成
-                
-                // [修复] 如果是 ACK 包，发送完直接回 IDLE，绝不等待 ACK
-                if (g_LoRaManager.is_sending_ack) {
+                if (s_Manager.is_sending_ack) {
                     Manager_ResetState();
                 } 
                 else {
-                    // 普通数据包，检查 TxBuffer 中的控制位
-                    uint8_t ctrl_offset = (g_LoRaConfig_Current.tmode == 1) ? 6 : 3;
-                    if (g_LoRaManager.TxBuffer[ctrl_offset] & CTRL_MASK_NEED_ACK) {
-                        g_LoRaManager.state = MGR_STATE_WAIT_ACK;
-                        g_LoRaManager.state_tick = now;
+                    uint8_t ctrl_offset = (cfg->tmode == 1) ? 6 : 3;
+                    if (s_Manager.TxBuffer[ctrl_offset] & CTRL_MASK_NEED_ACK) {
+                        s_Manager.state = MGR_STATE_WAIT_ACK;
+                        s_Manager.state_tick = now;
                     } else {
-                        if (g_LoRaManager.cb_on_tx) g_LoRaManager.cb_on_tx(true);
+                        if (s_Manager.cb_on_tx) s_Manager.cb_on_tx(true);
                         Manager_ResetState();
                     }
                 }
             }
 						
-            else if (now - g_LoRaManager.state_tick > LORA_TX_TIMEOUT_MS) {
-                // 物理发送超时 (硬件死锁)
-                if (g_LoRaManager.cb_on_err) g_LoRaManager.cb_on_err(LORA_ERR_TX_TIMEOUT);
+            else if (now - s_Manager.state_tick > LORA_TX_TIMEOUT_MS) {
+                if (s_Manager.cb_on_err) s_Manager.cb_on_err(LORA_ERR_TX_TIMEOUT);
                 Manager_ResetState();
             }
             break;
             
         case MGR_STATE_WAIT_ACK:
-            if (now - g_LoRaManager.state_tick > LORA_ACK_TIMEOUT_MS) {
-                if (g_LoRaManager.retry_cnt < LORA_MAX_RETRY) {
-                    g_LoRaManager.retry_cnt++;
-                    LORA_LOG("[MGR] Retry %d\r\n", g_LoRaManager.retry_cnt);
-                    if (_PhySend(g_LoRaManager.TxBuffer, s_CurrentTxLen)) {
+            if (now - s_Manager.state_tick > LORA_ACK_TIMEOUT_MS) {
+                if (s_Manager.retry_cnt < LORA_MAX_RETRY) {
+                    s_Manager.retry_cnt++;
+                    LORA_LOG("[MGR] Retry %d\r\n", s_Manager.retry_cnt);
+                    if (_PhySend(s_Manager.TxBuffer, s_CurrentTxLen)) {
                         // 重传成功启动
                     } else {
                         // 忙，下轮再试
                     }
                 } else {
-                    if (g_LoRaManager.cb_on_err) g_LoRaManager.cb_on_err(LORA_ERR_ACK_TIMEOUT);
-                    if (g_LoRaManager.cb_on_tx) g_LoRaManager.cb_on_tx(false);
+                    if (s_Manager.cb_on_err) s_Manager.cb_on_err(LORA_ERR_ACK_TIMEOUT);
+                    if (s_Manager.cb_on_tx) s_Manager.cb_on_tx(false);
                     Manager_ResetState();
                 }
             }
             break;
     }
+}
+
+bool Manager_IsBusy(void) {
+    return (s_Manager.state != MGR_STATE_IDLE);
 }
