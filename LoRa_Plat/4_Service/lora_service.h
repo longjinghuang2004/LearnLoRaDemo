@@ -28,36 +28,31 @@ typedef enum {
 } LoRa_Event_t;
 
 // ============================================================
-//                    2. 抽象接口定义
+//                    2. 回调接口
 // ============================================================
 typedef struct {
-    // --- 存储接口 ---
     void (*SaveConfig)(const LoRa_Config_t *cfg);
     void (*LoadConfig)(LoRa_Config_t *cfg);
-    
-    // --- 硬件能力接口 ---
     uint32_t (*GetRandomSeed)(void); 
     void (*SystemReset)(void);       
-    
-    // --- 业务接口 ---
     void (*OnRecvData)(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta);
     void (*OnEvent)(LoRa_Event_t event, void *arg);
-    
 } LoRa_Callback_t;
 
 // ============================================================
 //                    3. 全局函数
 // ============================================================
 
-// [移除] extern LoRa_Config_t g_LoRaConfig_Current;
-
 void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_id);
 void LoRa_Service_Run(void);
 bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id);
 void LoRa_Service_FactoryReset(void);
 
-// [新增] 配置访问接口
+// 配置访问
 const LoRa_Config_t* LoRa_Service_GetConfig(void);
 void LoRa_Service_SetConfig(const LoRa_Config_t *cfg);
+
+// [新增] 内部通知接口 (供 Command 模块调用)
+void LoRa_Service_NotifyEvent(LoRa_Event_t event, void *arg);
 
 #endif // __LORA_SERVICE_H

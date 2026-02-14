@@ -1,14 +1,17 @@
-#include "LoRaPlatConfig.h"
+/**
+  ******************************************************************************
+  * @file    lora_port_stm32f10x.c
+  * @author  LoRaPlat Team
+  * @brief   STM32F103 硬件接口实现 V3.3.0
+  ******************************************************************************
+  */
 
 #include "lora_port.h"
-#include "stm32f10x.h"  // <--- 硬件依赖仅限于此文件
-#include <string.h>
-//#include "Delay.h"      // 暂时保留对 System/Delay.h 的依赖，后续用 OSAL 替换
-
 #include "lora_osal.h"
+#include "stm32f10x.h"
+#include <string.h>
 
-
-// --- DMA 缓冲区 ---
+// --- DMA 缓冲区配置 ---
 #define PORT_DMA_RX_BUF_SIZE 512
 #define PORT_DMA_TX_BUF_SIZE 512
 
@@ -19,13 +22,12 @@ static volatile uint16_t s_RxReadIndex = 0;
 
 // --- 状态标志 ---
 static volatile bool s_TxDmaBusy = false;
-static volatile bool s_IsAuxBusy = false; // 由 EXTI 维护
 
 // ============================================================
 //                    1. 初始化与配置
 // ============================================================
 
-void Port_Init(uint32_t initial_baudrate)
+void LoRa_Port_Init(uint32_t baudrate)
 {
     // 1. 时钟使能
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB | RCC_APB2Periph_GPIOA | RCC_APB2Periph_AFIO, ENABLE);
@@ -57,7 +59,7 @@ void Port_Init(uint32_t initial_baudrate)
     GPIO_Init(GPIOA, &GPIO_InitStructure);
 
     // 3. USART3 配置
-    Port_ReInitUart(initial_baudrate); 
+    LoRa_Port_ReInitUart(baudrate); 
 
     // 4. DMA RX (Circular) -> DMA1_Channel3
     DMA_DeInit(DMA1_Channel3);
@@ -95,34 +97,17 @@ void Port_Init(uint32_t initial_baudrate)
     NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
     NVIC_Init(&NVIC_InitStructure);
 
-    // 7. EXTI 配置 (PA5 -> AUX)
-    GPIO_EXTILineConfig(GPIO_PortSourceGPIOA, GPIO_PinSource5);
-    
-    EXTI_InitTypeDef EXTI_InitStructure;
-    EXTI_InitStructure.EXTI_Line = EXTI_Line5;
-    EXTI_InitStructure.EXTI_Mode = EXTI_Mode_Interrupt;
-    EXTI_InitStructure.EXTI_Trigger = EXTI_Trigger_Rising_Falling; // 双边沿触发
-    EXTI_InitStructure.EXTI_LineCmd = ENABLE;
-    EXTI_Init(&EXTI_InitStructure);
-
-    // EXTI 中断优先级
-    NVIC_InitStructure.NVIC_IRQChannel = EXTI9_5_IRQn;
-    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 3;
-    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
-    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
-    NVIC_Init(&NVIC_InitStructure);
-
-    // 8. 启动
+    // 7. 启动
     DMA_Cmd(DMA1_Channel3, ENABLE);
     USART_DMACmd(USART3, USART_DMAReq_Rx | USART_DMAReq_Tx, ENABLE);
     USART_Cmd(USART3, ENABLE);
     
     // 初始状态同步
-    Port_SetMD0(false);
-    Port_SyncAuxState(); 
+    LoRa_Port_SetMD0(false);
+    LoRa_Port_SyncAuxState(); 
 }
 
-void Port_ReInitUart(uint32_t baudrate) {
+void LoRa_Port_ReInitUart(uint32_t baudrate) {
     USART_InitTypeDef USART_InitStructure;
     USART_InitStructure.USART_BaudRate = baudrate;
     USART_InitStructure.USART_WordLength = USART_WordLength_8b;
@@ -137,59 +122,59 @@ void Port_ReInitUart(uint32_t baudrate) {
 }
 
 // ============================================================
-//                    2. IO 操作
+//                    2. 引脚控制
 // ============================================================
 
-void Port_SetMD0(bool level) {
+void LoRa_Port_SetMD0(bool level) {
     GPIO_WriteBit(GPIOA, GPIO_Pin_4, level ? Bit_SET : Bit_RESET);
 }
 
-bool Port_GetAUX_Raw(void) {
+void LoRa_Port_SetRST(bool level) {
+    // 如有 RST 引脚，在此实现
+    // GPIO_WriteBit(GPIOA, GPIO_Pin_X, level ? Bit_SET : Bit_RESET);
+    (void)level;
+}
+
+bool LoRa_Port_GetAUX(void) {
     return (GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5) == 1);
 }
 
-bool Port_IsAuxBusy(void) {
-    return s_IsAuxBusy;
-}
-
-void Port_SyncAuxState(void) {
-    // 临时关中断，防止状态竞争
-		OSAL_EnterCritical();
-    
-    s_IsAuxBusy = (GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5) == 1);
-    
+void LoRa_Port_SyncAuxState(void) {
+    OSAL_EnterCritical();
     // 强制复位 DMA 硬件状态
     DMA_Cmd(DMA1_Channel2, DISABLE);
     DMA1_Channel2->CNDTR = 0;
     s_TxDmaBusy = false;
-    
-    EXTI_ClearITPendingBit(EXTI_Line5);
-    
     OSAL_ExitCritical();
 }
 
-void Port_SetRST(bool level) {
-    // 如有 RST 引脚，在此实现
-    // GPIO_WriteBit(GPIOA, GPIO_Pin_X, level ? Bit_SET : Bit_RESET);
+// ============================================================
+//                    3. 发送接口 (TX)
+// ============================================================
+
+bool LoRa_Port_IsTxBusy(void) {
+    return s_TxDmaBusy;
 }
 
-// ============================================================
-//                    3. 数据收发 (DMA)
-// ============================================================
-
-uint16_t Port_WriteData(const uint8_t *data, uint16_t len) {
+uint16_t LoRa_Port_TransmitData(const uint8_t *data, uint16_t len) {
     if (len == 0 || len > PORT_DMA_TX_BUF_SIZE) return 0;
 
-    // [优化] 临界区保护：防止 DMA 配置过程中被中断打断
     OSAL_EnterCritical();
+
+    // [关键修复] 双重检查：软件标志 + 硬件计数器
+    // 防止上层在 IsTxBusy 返回 false 后，硬件尚未完全就绪的微小间隙
+    if (s_TxDmaBusy || DMA_GetCurrDataCounter(DMA1_Channel2) != 0) {
+        OSAL_ExitCritical();
+        return 0; // 忙，拒绝发送
+    }
 
     // 1. 标记忙碌
     s_TxDmaBusy = true;
     
-    // 2. 填充数据
+    // 2. 填充数据 (安全，因为已确认 DMA 不忙)
     memcpy(s_DmaTxBuf, data, len);
     
-    // 3. 暴力重启 DMA
+    // 3. 启动 DMA
     DMA_Cmd(DMA1_Channel2, DISABLE);
     DMA1_Channel2->CNDTR = len;
     DMA_Cmd(DMA1_Channel2, ENABLE);
@@ -199,7 +184,11 @@ uint16_t Port_WriteData(const uint8_t *data, uint16_t len) {
     return len;
 }
 
-uint16_t Port_ReadData(uint8_t *buf, uint16_t max_len) {
+// ============================================================
+//                    4. 接收接口 (RX)
+// ============================================================
+
+uint16_t LoRa_Port_ReceiveData(uint8_t *buf, uint16_t max_len) {
     uint16_t cnt = 0;
     // 获取 DMA 当前写入位置 (硬件指针)
     uint16_t dma_write_idx = PORT_DMA_RX_BUF_SIZE - DMA_GetCurrDataCounter(DMA1_Channel3);
@@ -212,20 +201,16 @@ uint16_t Port_ReadData(uint8_t *buf, uint16_t max_len) {
     return cnt;
 }
 
-void Port_ClearRxBuffer(void) {
+void LoRa_Port_ClearRxBuffer(void) {
     s_RxReadIndex = PORT_DMA_RX_BUF_SIZE - DMA_GetCurrDataCounter(DMA1_Channel3);
 }
 
 // ============================================================
-//                    4. 辅助功能
+//                    5. 其他能力
 // ============================================================
 
-uint32_t Port_GetTick(void) {
-    return OSAL_GetTick(); // 调用 System/Delay.h
-}
-
-uint32_t Port_GetEntropy32FromADC(void) {
-    // 简单的 ADC 悬空采样
+uint32_t LoRa_Port_GetEntropy32(void) {
+    // 简单的 ADC 悬空采样 (保持原逻辑)
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1 | RCC_APB2Periph_GPIOA, ENABLE);
     RCC_ADCCLKConfig(RCC_PCLK2_Div6); 
     
@@ -263,7 +248,7 @@ uint32_t Port_GetEntropy32FromADC(void) {
 }
 
 // ============================================================
-//                    5. 中断服务函数
+//                    6. 中断服务函数
 // ============================================================
 
 // DMA TX 完成
@@ -271,14 +256,5 @@ void DMA1_Channel2_IRQHandler(void) {
     if (DMA_GetITStatus(DMA1_IT_TC2)) {
         DMA_ClearITPendingBit(DMA1_IT_TC2);
         s_TxDmaBusy = false;
-    }
-}
-
-// AUX 变化 (EXTI Line 5)
-void EXTI9_5_IRQHandler(void) {
-    if (EXTI_GetITStatus(EXTI_Line5) != RESET) {
-        // 读取当前电平更新标志
-        s_IsAuxBusy = (GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5) == 1);
-        EXTI_ClearITPendingBit(EXTI_Line5);
     }
 }

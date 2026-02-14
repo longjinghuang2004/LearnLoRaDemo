@@ -153,4 +153,11 @@ typedef struct {
  */
 #define LORA_ENABLE_FLASH_SAVE  1
 
+
+// ============================================================
+//                    6. 缓冲区配置 (Buffer Config)
+// ============================================================
+#define MGR_TX_BUF_SIZE     512   // 发送队列大小
+#define MGR_RX_BUF_SIZE     512   // 接收缓冲区大小
+
 #endif // __LORA_PLAT_CONFIG_H

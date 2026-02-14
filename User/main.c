@@ -41,7 +41,7 @@ void Adapter_LoadConfig(LoRa_Config_t *cfg) {
 }
 
 uint32_t Adapter_GetRandomSeed(void) {
-    return Port_GetEntropy32FromADC(); // 使用 ADC 悬空噪声作为种子
+    return LoRa_Port_GetEntropy32(); // 使用 ADC 悬空噪声作为种子
 }
 
 void Adapter_SystemReset(void) {

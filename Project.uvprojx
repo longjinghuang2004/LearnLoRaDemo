@@ -339,7 +339,7 @@
               <MiscControls>--no-multibyte-chars</MiscControls>
               <Define>USE_STDPERIPH_DRIVER</Define>
               <Undefine></Undefine>
-              <IncludePath>.\Start;.\Library;.\User;.\System;.\Hardware;.\function;.\Model;.\LoRa_Plat;.\LoRa_Plat\0_OSAL;.\LoRa_Plat\1_Port;.\LoRa_Plat\Driver;.\LoRa_Plat\3_Manager;.\LoRa_Plat\4_Service</IncludePath>
+              <IncludePath>.\Start;.\Library;.\User;.\System;.\Hardware;.\function;.\Model;.\LoRa_Plat;.\LoRa_Plat\0_OSAL;.\LoRa_Plat\0_Utils;.\LoRa_Plat\1_Port;.\LoRa_Plat\2_Driver;.\LoRa_Plat\3_Manager;.\LoRa_Plat\4_Service</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -829,6 +829,11 @@
           <GroupName>LoRa_Plat</GroupName>
           <Files>
             <File>
+              <FileName>LoRaPlatConfig.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\LoRaPlatConfig.h</FilePath>
+            </File>
+            <File>
               <FileName>lora_osal.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\LoRa_Plat\0_OSAL\lora_osal.c</FilePath>
@@ -839,9 +844,24 @@
               <FilePath>.\LoRa_Plat\0_OSAL\lora_osal.h</FilePath>
             </File>
             <File>
-              <FileName>LoRaPlatConfig.h</FileName>
+              <FileName>lora_crc16.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\0_Utils\lora_crc16.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_crc16.h</FileName>
               <FileType>5</FileType>
-              <FilePath>.\LoRa_Plat\LoRaPlatConfig.h</FilePath>
+              <FilePath>.\LoRa_Plat\0_Utils\lora_crc16.h</FilePath>
+            </File>
+            <File>
+              <FileName>lora_ring_buffer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\0_Utils\lora_ring_buffer.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_ring_buffer.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\0_Utils\lora_ring_buffer.h</FilePath>
             </File>
             <File>
               <FileName>lora_port_stm32f10x.c</FileName>
@@ -854,19 +874,34 @@
               <FilePath>.\LoRa_Plat\1_Port\lora_port.h</FilePath>
             </File>
             <File>
-              <FileName>lora_driver_core.c</FileName>
+              <FileName>lora_driver.c</FileName>
               <FileType>1</FileType>
-              <FilePath>.\LoRa_Plat\Driver\lora_driver_core.c</FilePath>
-            </File>
-            <File>
-              <FileName>lora_driver_config.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\LoRa_Plat\Driver\lora_driver_config.c</FilePath>
+              <FilePath>.\LoRa_Plat\2_Driver\lora_driver.c</FilePath>
             </File>
             <File>
               <FileName>lora_driver.h</FileName>
               <FileType>5</FileType>
-              <FilePath>.\LoRa_Plat\Driver\lora_driver.h</FilePath>
+              <FilePath>.\LoRa_Plat\2_Driver\lora_driver.h</FilePath>
+            </File>
+            <File>
+              <FileName>lora_driver_core.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\2_Driver\lora_driver_core.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_driver_config.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\2_Driver\lora_driver_config.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_at_command_engine.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\2_Driver\lora_at_command_engine.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_at_command_engine.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\2_Driver\lora_at_command_engine.h</FilePath>
             </File>
             <File>
               <FileName>lora_manager.c</FileName>
@@ -879,6 +914,36 @@
               <FilePath>.\LoRa_Plat\3_Manager\lora_manager.h</FilePath>
             </File>
             <File>
+              <FileName>lora_manager_buffer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\3_Manager\lora_manager_buffer.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_manager_buffer.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\3_Manager\lora_manager_buffer.h</FilePath>
+            </File>
+            <File>
+              <FileName>lora_manager_protocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\3_Manager\lora_manager_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_manager_protocol.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\3_Manager\lora_manager_protocol.h</FilePath>
+            </File>
+            <File>
+              <FileName>lora_manager_fsm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\3_Manager\lora_manager_fsm.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_manager_fsm.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\3_Manager\lora_manager_fsm.h</FilePath>
+            </File>
+            <File>
               <FileName>lora_service.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\LoRa_Plat\4_Service\lora_service.c</FilePath>
@@ -887,6 +952,26 @@
               <FileName>lora_service.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\LoRa_Plat\4_Service\lora_service.h</FilePath>
+            </File>
+            <File>
+              <FileName>lora_service_config.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\4_Service\lora_service_config.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_service_config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\4_Service\lora_service_config.h</FilePath>
+            </File>
+            <File>
+              <FileName>lora_service_command.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\4_Service\lora_service_command.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_service_command.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\4_Service\lora_service_command.h</FilePath>
             </File>
           </Files>
         </Group>
