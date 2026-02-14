@@ -36,7 +36,8 @@ void LoRa_Manager_FSM_Init(void);
 /**
  * @brief  运行状态机 (周期调用)
  */
-void LoRa_Manager_FSM_Run(void);
+// 【修改】增加 scratch_buf 参数
+void LoRa_Manager_FSM_Run(uint8_t *scratch_buf, uint16_t scratch_len);
 
 /**
  * @brief  处理接收到的数据包
@@ -51,7 +52,9 @@ void LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet);
  * @param  target_id: 目标ID
  * @return true=成功入队
  */
-bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target_id);
+// 【修改】增加 scratch_buf 参数
+bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target_id,
+                           uint8_t *scratch_buf, uint16_t scratch_len);
 
 /**
  * @brief  查询是否忙碌

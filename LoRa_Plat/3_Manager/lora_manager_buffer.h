@@ -31,22 +31,27 @@ void LoRa_Manager_Buffer_Init(void);
  * @param  packet: 待发送的数据包结构体
  * @param  tmode: 传输模式
  * @param  channel: 信道
+ * @param  scratch_buf: 外部传入的共享缓冲区
+ * @param  scratch_len: 缓冲区长度
  * @return true=成功入队, false=队列满
  */
-bool LoRa_Manager_Buffer_PushTx(const LoRa_Packet_t *packet, uint8_t tmode, uint8_t channel);
+bool LoRa_Manager_Buffer_PushTx(const LoRa_Packet_t *packet, uint8_t tmode, uint8_t channel, 
+                                uint8_t *scratch_buf, uint16_t scratch_len);
 
 /**
  * @brief  检查发送队列是否有数据
+ * @return true=有数据, false=空
  */
+// 【关键修复】之前可能漏掉了这一行声明
 bool LoRa_Manager_Buffer_HasTxData(void);
 
 /**
  * @brief  从发送队列头部预览数据 (Peek)
- * @param  buffer: 输出缓冲区
- * @param  max_len: 缓冲区大小
+ * @param  scratch_buf: 输出缓冲区
+ * @param  scratch_len: 缓冲区大小
  * @return 数据长度
  */
-uint16_t LoRa_Manager_Buffer_PeekTx(uint8_t *buffer, uint16_t max_len);
+uint16_t LoRa_Manager_Buffer_PeekTx(uint8_t *scratch_buf, uint16_t scratch_len);
 
 /**
  * @brief  从发送队列移除已发送的数据 (Pop)
@@ -69,8 +74,11 @@ uint16_t LoRa_Manager_Buffer_PullFromPort(void);
  * @param  packet: 输出结构体
  * @param  local_id: 本地 ID
  * @param  group_id: 组 ID
+ * @param  scratch_buf: 外部传入的共享缓冲区
+ * @param  scratch_len: 缓冲区长度
  * @return true=解析成功, false=无完整包
  */
-bool LoRa_Manager_Buffer_GetRxPacket(LoRa_Packet_t *packet, uint16_t local_id, uint16_t group_id);
+bool LoRa_Manager_Buffer_GetRxPacket(LoRa_Packet_t *packet, uint16_t local_id, uint16_t group_id,
+                                     uint8_t *scratch_buf, uint16_t scratch_len);
 
 #endif // __LORA_MANAGER_BUFFER_H

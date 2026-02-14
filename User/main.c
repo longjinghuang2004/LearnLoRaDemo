@@ -192,6 +192,8 @@ int main(void)
     
     // 3. 检查并强制配置测试环境 (仅用于测试阶段)
     Force_Init_Config();
+	
+		NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);
     
     Show_Help();
 
