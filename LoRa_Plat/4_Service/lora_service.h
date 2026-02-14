@@ -24,7 +24,12 @@ typedef enum {
     LORA_EVENT_FACTORY_RESET,   
     LORA_EVENT_REBOOT_REQ,      
     LORA_EVENT_MSG_RECEIVED,    
-    LORA_EVENT_MSG_SENT         
+    
+    // --- 发送相关事件 ---
+    LORA_EVENT_MSG_SENT,        // 物理层发送完成 (DMA 传输结束)
+    LORA_EVENT_TX_FINISHED,     // 发送流程彻底结束 (收到 ACK 或 广播发完)
+    LORA_EVENT_TX_FAILED        // 发送失败 (重传次数耗尽)
+    
 } LoRa_Event_t;
 
 // ============================================================
@@ -52,7 +57,7 @@ void LoRa_Service_FactoryReset(void);
 const LoRa_Config_t* LoRa_Service_GetConfig(void);
 void LoRa_Service_SetConfig(const LoRa_Config_t *cfg);
 
-// [新增] 内部通知接口 (供 Command 模块调用)
+// 内部通知接口 (供 Command 模块调用)
 void LoRa_Service_NotifyEvent(LoRa_Event_t event, void *arg);
 
 #endif // __LORA_SERVICE_H

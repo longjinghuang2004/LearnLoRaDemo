@@ -178,4 +178,22 @@ typedef struct {
 #define MGR_TX_BUF_SIZE     512   // 发送队列大小
 #define MGR_RX_BUF_SIZE     512   // 接收缓冲区大小
 
+// ============================================================
+//                    7. 广播模式参数配置
+// ============================================================
+
+/**
+ * @brief 广播包盲发次数
+ * @note  广播包没有 ACK 机制，为了提高送达率，采用连续多次发送的策略。
+ *        建议值：3 (即发送 1 次 + 重发 2 次)
+ */
+#define LORA_BROADCAST_REPEAT   3
+
+/**
+ * @brief 广播包发送间隔 (单位: ms)
+ * @note  连续发送广播包之间的“留白”时间，给接收端处理喘息的机会。
+ *        建议值：50ms
+ */
+#define LORA_BROADCAST_INTERVAL 50
+
 #endif // __LORA_PLAT_CONFIG_H

@@ -21,7 +21,8 @@ typedef enum {
     LORA_FSM_IDLE = 0,      // 空闲
     LORA_FSM_TX_RUNNING,    // 正在发送 (等待硬件完成) - 目前简化未用
     LORA_FSM_WAIT_ACK,      // 等待 ACK (重传计时中)
-    LORA_FSM_ACK_DELAY      // 发送 ACK 前的延时
+    LORA_FSM_ACK_DELAY,      // 发送 ACK 前的延时
+    LORA_FSM_BROADCAST_RUN  // [新增] 广播盲发运行中
 } LoRa_FSM_State_t;
 
 // ============================================================
