@@ -8,6 +8,9 @@
 
 #include "lora_manager_protocol.h"
 #include "lora_crc16.h"
+
+#include "lora_osal.h"
+
 #include <string.h>
 
 // ============================================================
@@ -20,7 +23,8 @@ uint16_t LoRa_Manager_Protocol_Pack(const LoRa_Packet_t *packet,
                                     uint8_t tmode,
                                     uint8_t channel)
 {
-    if (!packet || !buffer) return 0;
+    // [修正1] 这里的参数是 buffer_size，不是 length
+    LORA_CHECK(packet && buffer && buffer_size > 0, 0);
     
     uint16_t idx = 0;
     
@@ -70,12 +74,13 @@ uint16_t LoRa_Manager_Protocol_Pack(const LoRa_Packet_t *packet,
     
     // 8. CRC16 (可选)
     if (packet->HasCrc) {
-        if (idx + 2 > buffer_size) return 0;
+        // [修正2] 删除这里原本报错的 LORA_CHECK(buffer && length > 0...)
+        // 因为 buffer 在函数开头已经检查过了，且这里没有 length 变量
+        
         // 计算范围：从协议头之后(Length)开始，到 Payload 结束
-        // 定点模式下，协议头前面有3字节，协议头本身2字节，所以从 buffer[3+2] 开始算?
-        // 不，CRC通常只校验协议帧本身。
         // 协议帧起始位置：tmode==1 ? 3 : 0
         uint16_t frame_start = (tmode == 1) ? 3 : 0;
+        
         // 校验内容：Length(1) + Ctrl(1) + Seq(1) + Addr(4) + Payload(N)
         // 当前 idx 指向 CRC 存放位置
         // 校验长度 = idx - (frame_start + 2)
@@ -85,6 +90,8 @@ uint16_t LoRa_Manager_Protocol_Pack(const LoRa_Packet_t *packet,
         uint16_t crc_len = idx - crc_calc_start;
         
         uint16_t crc = LoRa_CRC16_Calculate(&buffer[crc_calc_start], crc_len);
+        
+        if (idx + 2 > buffer_size) return 0; // 确保空间足够
         buffer[idx++] = (uint8_t)(crc & 0xFF);
         buffer[idx++] = (uint8_t)(crc >> 8);
     }

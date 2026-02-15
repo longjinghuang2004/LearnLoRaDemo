@@ -13,6 +13,9 @@
 #include <stdbool.h>
 #include "lora_manager_protocol.h"
 
+
+
+
 // ============================================================
 //                    1. 状态定义
 // ============================================================
@@ -31,8 +34,9 @@ typedef enum {
 
 /**
  * @brief  初始化状态机
+ * @param  cfg: 配置结构体指针 (依赖注入)
  */
-void LoRa_Manager_FSM_Init(void);
+void LoRa_Manager_FSM_Init(const LoRa_Config_t *cfg); // [修改] 增加参数
 
 /**
  * @brief  运行状态机 (周期调用)
@@ -65,5 +69,12 @@ bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target
  * @brief  查询是否忙碌
  */
 bool LoRa_Manager_FSM_IsBusy(void);
+
+/**
+ * @brief  获取距离下一次超时的剩余时间 (Tickless 核心)
+ * @return 剩余毫秒数 (0=立即唤醒, INFINITE=无任务)
+ */
+uint32_t LoRa_Manager_FSM_GetNextTimeout(void); // [新增]
+
 
 #endif // __LORA_MANAGER_FSM_H

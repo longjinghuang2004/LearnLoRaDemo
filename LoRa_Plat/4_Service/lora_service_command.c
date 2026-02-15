@@ -2,17 +2,17 @@
   ******************************************************************************
   * @file    lora_service_command.c
   * @author  LoRaPlat Team
-  * @brief   LoRa 平台指令解析实现 (V3.7 增强版)
-  *          支持 INFO 查询、BIND 绑定、FACTORY 恢复出厂
+  * @brief   LoRa 平台指令解析实现 (V3.8 Fix Warnings)
   ******************************************************************************
   */
 
 #include "lora_service_command.h"
 #include "lora_service_config.h"
-#include "lora_service.h" // 获取事件通知接口
+#include "lora_service.h"
 #include "lora_osal.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h> // 必须包含，用于 strtoul
 
 // ============================================================
 //                    1. 内部辅助函数
@@ -47,96 +47,91 @@ static const char* _GetRateStr(uint8_t rate) {
 // ============================================================
 
 bool LoRa_Service_Command_Process(char *cmd_str) {
-    char *cmd = strtok(cmd_str, "="); 
-    char *params = strtok(NULL, "");  
+    // 1. 获取当前配置 (用于比对 Token)
+    const LoRa_Config_t *cfg = LoRa_Service_Config_Get();
+    
+    // 2. 格式检查: CMD
+    char *prefix = strtok(cmd_str, ":"); 
+    if (prefix == NULL || strcmp(prefix, "CMD") != 0) return false;
+    
+    // 3. [安全核心] 提取并校验 Token
+    char *token_str = strtok(NULL, ":");
+    if (token_str == NULL) {
+        LORA_LOG("[SEC] Missing Token in Command!\r\n");
+        return false;
+    }
+    
+    // 使用 strtoul 解析 hex 字符串
+    uint32_t input_token = (uint32_t)strtoul(token_str, NULL, 16);
+    if (input_token != cfg->token) {
+        LORA_LOG("[SEC] Token Mismatch! Expect %08X, Got %08X\r\n", cfg->token, input_token);
+        return false; // 鉴权失败，拒绝执行
+    }
+
+    // 4. 提取具体指令与参数
+    char *cmd = strtok(NULL, "="); 
+    char *params = strtok(NULL, ""); // 获取剩余所有字符串作为参数
 
     if (cmd == NULL) return false;
 
-    LORA_LOG("[SVC] Cmd: %s\r\n", cmd);
+    LORA_LOG("[SVC] Auth OK. Executing: %s\r\n", cmd);
     
-    // 获取当前配置副本
-    // 注意：这里获取的是 const 指针，我们需要拷贝一份来修改，或者直接修改 RAM 副本
-    // LoRa_Service_Config_Get 返回的是 const，为了修改，我们需要拷贝一份
-    LoRa_Config_t cfg = *LoRa_Service_Config_Get();
+    // 准备修改配置
+    LoRa_Config_t new_cfg = *cfg;
     bool cfg_changed = false;
 
-    // 1. INFO 指令 (查询当前配置)
+    // --- 指令处理逻辑 ---
+
+    // INFO
     if (strcmp(cmd, "INFO") == 0) {
         LORA_LOG("=== LoRa Configuration ===\r\n");
-        LORA_LOG("  UUID:    %08X\r\n", cfg.uuid);
-        LORA_LOG("  NetID:   %d (0x%04X)\r\n", cfg.net_id, cfg.net_id);
-        LORA_LOG("  Group:   %d (0x%04X)\r\n", cfg.group_id, cfg.group_id);
-        LORA_LOG("  HW Addr: %04X\r\n", cfg.hw_addr);
-        LORA_LOG("  Channel: %d\r\n", cfg.channel);
-        LORA_LOG("  Power:   %d (%s)\r\n", cfg.power, _GetPowerStr(cfg.power));
-        LORA_LOG("  Rate:    %d (%s)\r\n", cfg.air_rate, _GetRateStr(cfg.air_rate));
-        LORA_LOG("  Mode:    %d (%s)\r\n", cfg.tmode, (cfg.tmode==0)?"Trans":"Fixed");
-        LORA_LOG("  Token:   %08X\r\n", cfg.token);
+        LORA_LOG("  UUID:    %08X\r\n", new_cfg.uuid);
+        LORA_LOG("  NetID:   %d\r\n", new_cfg.net_id);
+        LORA_LOG("  Group:   %d\r\n", new_cfg.group_id);
+        LORA_LOG("  Token:   %08X\r\n", new_cfg.token);
+        LORA_LOG("  Chan:    %d\r\n", new_cfg.channel);
+        // [修复] 这里调用了辅助函数，消除了 Warning #177
+        LORA_LOG("  Power:   %s\r\n", _GetPowerStr(new_cfg.power));
+        LORA_LOG("  Rate:    %s\r\n", _GetRateStr(new_cfg.air_rate));
         LORA_LOG("==========================\r\n");
         return true;
     }
     
-    // 2. BIND 指令 (绑定 ID)
-    // 格式: CMD:BIND=UUID,NetID (支持 Hex UUID)
+    // BIND (格式: BIND=UUID,NetID)
     else if (strcmp(cmd, "BIND") == 0 && params != NULL) {
         uint32_t target_uuid;
         uint16_t new_net_id;
         
-        // 尝试解析 Hex 格式 (例如 AAAA1111,5)
+        // 尝试解析 Hex UUID
         int parsed = sscanf(params, "%x,%hu", &target_uuid, &new_net_id);
-        if (parsed != 2) {
-             // 尝试解析 Decimal 格式
-             parsed = sscanf(params, "%u,%hu", &target_uuid, &new_net_id);
-        }
+        if (parsed != 2) parsed = sscanf(params, "%u,%hu", &target_uuid, &new_net_id);
 
         if (parsed == 2) {
-            LORA_LOG("[CMD] Bind Req: UUID=%08X, ID=%d. My UUID=%08X\r\n", target_uuid, new_net_id, cfg.uuid);
-            
-            if (target_uuid == cfg.uuid) {
-                cfg.net_id = new_net_id;
+            if (target_uuid == new_cfg.uuid) {
+                new_cfg.net_id = new_net_id;
                 cfg_changed = true;
-                // 触发绑定成功事件
                 LoRa_Service_NotifyEvent(LORA_EVENT_BIND_SUCCESS, &new_net_id);
             } else {
-                LORA_LOG("[CMD] UUID Mismatch!\r\n");
+                LORA_LOG("[CMD] UUID Mismatch for BIND.\r\n");
             }
-        } else {
-            LORA_LOG("[CMD] Param Parse Error\r\n");
         }
     }
     
-    // 3. GROUP 指令 (设置组 ID)
-    // 格式: CMD:GROUP=GroupID
-    else if (strcmp(cmd, "GROUP") == 0 && params != NULL) {
-        uint16_t new_group_id;
-        if (sscanf(params, "%hu", &new_group_id) == 1) {
-            cfg.group_id = new_group_id;
-            cfg_changed = true;
-            LoRa_Service_NotifyEvent(LORA_EVENT_GROUP_UPDATE, &new_group_id);
-        }
-    }
-    
-    // 4. RST 指令 (重启)
+    // RST
     else if (strcmp(cmd, "RST") == 0) {
         LoRa_Service_NotifyEvent(LORA_EVENT_REBOOT_REQ, NULL);
-        // 注意：重启通常由 Adapter 层处理，这里只是通知
-        // 如果 Adapter 没处理，这里返回 true 也没用
-        // 建议在 main.c 的 OnEvent 中处理 REBOOT_REQ
         return true;
     }
     
-    // 5. FACTORY 指令 (恢复出厂)
+    // FACTORY
     else if (strcmp(cmd, "FACTORY") == 0) {
         LoRa_Service_FactoryReset();
-        // FactoryReset 内部已经调用了 SaveConfig (如果实现了的话)
-        // 并且触发了 FACTORY_RESET 事件
         return true;
     }
     
-    // 如果配置发生了变更，保存并应用
+    // 应用变更
     if (cfg_changed) {
-        LoRa_Service_Config_Set(&cfg);
-        // Config_Set 内部会触发 SaveConfig 回调
+        LoRa_Service_Config_Set(&new_cfg);
         LoRa_Service_NotifyEvent(LORA_EVENT_CONFIG_COMMIT, NULL);
         return true;
     }

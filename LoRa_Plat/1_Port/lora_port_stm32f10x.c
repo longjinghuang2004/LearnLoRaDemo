@@ -157,8 +157,7 @@ bool LoRa_Port_IsTxBusy(void) {
 }
 
 uint16_t LoRa_Port_TransmitData(const uint8_t *data, uint16_t len) {
-    if (len == 0 || len > PORT_DMA_TX_BUF_SIZE) return 0;
-
+    LORA_CHECK(data && len > 0 && len <= PORT_DMA_TX_BUF_SIZE, 0);
     // 【关键修改】声明变量 primask 并接收返回值
     uint32_t primask = OSAL_EnterCritical();
 
@@ -190,6 +189,8 @@ uint16_t LoRa_Port_TransmitData(const uint8_t *data, uint16_t len) {
 // ============================================================
 
 uint16_t LoRa_Port_ReceiveData(uint8_t *buf, uint16_t max_len) {
+	
+    LORA_CHECK(buf && max_len > 0, 0);		
     uint16_t cnt = 0;
     // 获取 DMA 当前写入位置 (硬件指针)
     uint16_t dma_write_idx = PORT_DMA_RX_BUF_SIZE - DMA_GetCurrDataCounter(DMA1_Channel3);

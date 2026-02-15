@@ -9,6 +9,9 @@
 #include "lora_osal.h"
 #include <stdio.h> 
 
+// [新增] 内部偏移量变量
+static volatile uint32_t s_TickOffset = 0;
+
 // ============================================================
 //                    1. 默认桩函数 (Safety Stubs)
 // ============================================================
@@ -39,7 +42,8 @@ static bool s_IsInit = false;
 // ============================================================
 
 bool LoRa_OSAL_Init(const LoRa_OSAL_Interface_t *impl) {
-    if (impl == NULL) return false;
+    // 这里不能用 LORA_CHECK，因为 Log 可能还没初始化
+    if (!impl) return false; 
     
     if (!impl->GetTick || !impl->DelayMs || !impl->EnterCritical || !impl->ExitCritical) {
         return false; 
@@ -73,6 +77,15 @@ void     _osal_enter_critical(void) { s_Impl.EnterCritical(); }
 void     _osal_exit_critical(void) { s_Impl.ExitCritical(); }
 void*    _osal_malloc(uint32_t size) { return s_Impl.Malloc(size); }
 void     _osal_free(void* ptr) { s_Impl.Free(ptr); }
+
+// [新增] 补偿函数实现
+void LoRa_OSAL_CompensateTick(uint32_t ms) {
+    if (ms == 0) return;
+    // 必须在临界区保护下修改，防止与 GetTick 竞争
+    s_Impl.EnterCritical();
+    s_TickOffset += ms;
+    s_Impl.ExitCritical();
+}
 
 // ============================================================
 //                    4. 日志包装器

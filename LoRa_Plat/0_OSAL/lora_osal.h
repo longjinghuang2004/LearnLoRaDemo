@@ -45,6 +45,11 @@ void     _osal_delay_ms(uint32_t ms);
 void*    _osal_malloc(uint32_t size);
 void     _osal_free(void* ptr);
 
+
+// [新增] 低功耗补偿接口
+// 当系统从停止/待机模式唤醒后（SysTick已暂停），调用此函数补偿休眠时长
+void LoRa_OSAL_CompensateTick(uint32_t ms);
+
 // [新增] 临界区嵌套支持 (Cortex-M3/M4)
 // 使用 __get_PRIMASK() 保存当前中断状态，__set_PRIMASK() 恢复
 // 这样即使在 ISR 中调用，也不会意外开启全局中断
@@ -82,6 +87,41 @@ void     _osal_free(void* ptr);
 #else
     #define LORA_LOG(...)       do {} while (0)
     #define LORA_HEXDUMP(t,d,l) do {} while (0)
+#endif
+
+// [新增] 参数检查宏
+// 如果 expr 为假 (例如指针为空)，则打印错误日志并返回 ret_val
+#if (defined(LORA_DEBUG_PRINT) && LORA_DEBUG_PRINT == 1)
+    #define LORA_CHECK(expr, ret_val) \
+        do { \
+            if (!(expr)) { \
+                LORA_LOG("[ERR] %s:%d Check Failed: "#expr"\r\n", __func__, __LINE__); \
+                return ret_val; \
+            } \
+        } while(0)
+        
+    #define LORA_CHECK_VOID(expr) \
+        do { \
+            if (!(expr)) { \
+                LORA_LOG("[ERR] %s:%d Check Failed: "#expr"\r\n", __func__, __LINE__); \
+                return; \
+            } \
+        } while(0)
+#else
+    // Release 模式下只做检查，不打印，不包含文件名字符串 (省空间)
+    #define LORA_CHECK(expr, ret_val) \
+        do { \
+            if (!(expr)) { \
+                return ret_val; \
+            } \
+        } while(0)
+
+    #define LORA_CHECK_VOID(expr) \
+        do { \
+            if (!(expr)) { \
+                return; \
+            } \
+        } while(0)
 #endif
 
 #endif // __LORA_OSAL_H

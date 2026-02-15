@@ -7,6 +7,9 @@
   */
 
 #include "lora_ring_buffer.h"
+
+#include "lora_osal.h"
+
 #include <string.h> // memcpy
 
 // ============================================================
@@ -24,7 +27,7 @@ void LoRa_RingBuffer_Init(LoRa_RingBuffer_t *rb, uint8_t *buffer, uint16_t size)
 }
 
 uint16_t LoRa_RingBuffer_Write(LoRa_RingBuffer_t *rb, const uint8_t *data, uint16_t length) {
-    if (!rb || !data || length == 0) return 0;
+    LORA_CHECK(rb && rb->pBuffer && data && length > 0, 0);
     
     uint16_t free_space = rb->Size - rb->Count;
     if (length > free_space) length = free_space; // 截断写入
@@ -50,7 +53,7 @@ uint16_t LoRa_RingBuffer_Write(LoRa_RingBuffer_t *rb, const uint8_t *data, uint1
 }
 
 uint16_t LoRa_RingBuffer_Read(LoRa_RingBuffer_t *rb, uint8_t *data, uint16_t max_length) {
-    if (!rb || !data || max_length == 0 || rb->Count == 0) return 0;
+    LORA_CHECK(rb && rb->pBuffer && data && max_length > 0, 0);
     
     if (max_length > rb->Count) max_length = rb->Count;
     

@@ -32,7 +32,7 @@ void LoRa_Manager_Buffer_Init(void) {
 
 bool LoRa_Manager_Buffer_PushTx(const LoRa_Packet_t *packet, uint8_t tmode, uint8_t channel, 
                                 uint8_t *scratch_buf, uint16_t scratch_len) {
-    if (!scratch_buf) return false;
+    LORA_CHECK(packet && scratch_buf && scratch_len > 0, false);
 
     // 1. 序列化 (耗时操作，在临界区外进行，使用传入的栈内存)
     uint16_t len = LoRa_Manager_Protocol_Pack(packet, scratch_buf, scratch_len, tmode, channel);
@@ -97,7 +97,7 @@ void LoRa_Manager_Buffer_PopTx(uint16_t len) {
 
 bool LoRa_Manager_Buffer_PushAck(const LoRa_Packet_t *packet, uint8_t tmode, uint8_t channel, 
                                  uint8_t *scratch_buf, uint16_t scratch_len) {
-    if (!scratch_buf) return false;
+    LORA_CHECK(packet && scratch_buf && scratch_len > 0, false);
 
     // 1. 序列化
     uint16_t len = LoRa_Manager_Protocol_Pack(packet, scratch_buf, scratch_len, tmode, channel);
@@ -175,7 +175,7 @@ uint16_t LoRa_Manager_Buffer_PullFromPort(void) {
 
 bool LoRa_Manager_Buffer_GetRxPacket(LoRa_Packet_t *packet, uint16_t local_id, uint16_t group_id,
                                      uint8_t *scratch_buf, uint16_t scratch_len) {
-    if (LoRa_RingBuffer_IsEmpty(&s_RxRing)) return false;
+    LORA_CHECK(packet && scratch_buf && scratch_len > 0, false);
     
     uint16_t count = LoRa_RingBuffer_GetCount(&s_RxRing);
     if (count > scratch_len) count = scratch_len; // 保护防止溢出

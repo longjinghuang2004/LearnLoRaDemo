@@ -196,4 +196,6 @@ typedef struct {
  */
 #define LORA_BROADCAST_INTERVAL 50
 
+
+
 #endif // __LORA_PLAT_CONFIG_H
