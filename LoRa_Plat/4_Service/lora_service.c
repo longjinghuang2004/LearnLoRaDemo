@@ -1,7 +1,9 @@
 #include "lora_service.h"
 #include "lora_service_config.h"
+#include "lora_service_monitor.h"
 // [移除] #include "lora_service_command.h" 
 #include "lora_manager.h"
+
 #include "lora_driver.h" 
 #include "lora_port.h" 
 #include "lora_osal.h"
@@ -73,7 +75,12 @@ void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_i
 }
 
 void LoRa_Service_Run(void) {
+    // 1. 运行监视器 (软件看门狗)
+    LoRa_Service_Monitor_Run();
+    
+    // 2. 运行原有逻辑
     LoRa_Manager_Run();
+		
 }
 
 bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id) {

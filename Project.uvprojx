@@ -973,6 +973,16 @@
               <FileType>5</FileType>
               <FilePath>.\LoRa_Plat\4_Service\lora_service_command.h</FilePath>
             </File>
+            <File>
+              <FileName>lora_service_monitor.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\LoRa_Plat\4_Service\lora_service_monitor.c</FilePath>
+            </File>
+            <File>
+              <FileName>lora_service_monitor.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\LoRa_Plat\4_Service\lora_service_monitor.h</FilePath>
+            </File>
           </Files>
         </Group>
       </Groups>
