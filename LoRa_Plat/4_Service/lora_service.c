@@ -1,98 +1,112 @@
+/**
+  ******************************************************************************
+  * @file    lora_service.c
+  * @author  LoRaPlat Team
+  * @brief   LoRa 业务服务层实现 (V3.9)
+  *          负责协调 Manager, Config, Monitor 以及对外接口
+  ******************************************************************************
+  */
+
 #include "lora_service.h"
+#include "lora_manager.h"
 #include "lora_service_config.h"
 #include "lora_service_monitor.h"
-// [移除] #include "lora_service_command.h" 
-#include "lora_manager.h"
-
-#include "lora_driver.h" 
-#include "lora_port.h" 
+#include "lora_driver.h"
 #include "lora_osal.h"
 #include <string.h>
-#include <stdlib.h>
-
-
-
-static LoRa_Callback_t g_cb; 
-#define CMD_PREFIX "CMD:"
-
-// [新增] 定义无穷大时间 (表示无定时任务)
-#define LORA_TIMEOUT_INFINITE   0xFFFFFFFF
 
 // ============================================================
-//                    内部回调适配
+//                    内部变量
 // ============================================================
 
-static void _On_Mgr_RxData(uint8_t *data, uint16_t len, uint16_t src_id) {
-    // [修改] 彻底移除 CMD 拦截逻辑
-    // 平台不再关心数据内容，直接透传给业务层
-    // 安全性提升：防止恶意指令绕过业务层直接重置设备
-    if (g_cb.OnRecvData) {
-        LoRa_RxMeta_t meta = { .rssi = -128, .snr = 0 };
-        g_cb.OnRecvData(src_id, data, len, &meta);
+static const LoRa_Callback_t *s_AppCb = NULL;
+
+// ============================================================
+//                    内部回调 (Manager -> Service)
+// ============================================================
+
+// 接收数据回调
+static void _Service_OnRecv(uint8_t *data, uint16_t len, uint16_t src_id) {
+    if (s_AppCb && s_AppCb->OnRecvData) {
+        // 简单的 RSSI 模拟 (实际应从驱动获取，这里暂未实现硬件读取 RSSI)
+        LoRa_RxMeta_t meta = { .rssi = -60, .snr = 10 };
+        s_AppCb->OnRecvData(src_id, data, len, &meta);
+    }
+    
+    // 触发事件
+    if (s_AppCb && s_AppCb->OnEvent) {
+        s_AppCb->OnEvent(LORA_EVENT_MSG_RECEIVED, NULL);
     }
 }
-
 
 // ============================================================
 //                    核心接口实现
 // ============================================================
 
 void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_id) {
-    if (callbacks) g_cb = *callbacks;
+    s_AppCb = callbacks;
     
     // 1. 初始化配置模块
     LoRa_Service_Config_Init();
     
-    // 2. 加载 Flash 配置 (如果有)
-    if (g_cb.LoadConfig) {
-        LoRa_Config_t flash_cfg;
-        g_cb.LoadConfig(&flash_cfg);
-        if (flash_cfg.magic == LORA_CFG_MAGIC) {
-            LoRa_Service_Config_Set(&flash_cfg);
-        } else {
-            // Flash 无效，保存默认值
-            if (g_cb.SaveConfig) g_cb.SaveConfig(LoRa_Service_Config_Get());
-        }
-    }
-    
-    // 3. 调试覆盖
+    // [可选] 覆盖 NetID (用于调试或动态分配)
     if (override_net_id != 0) {
-        LoRa_Config_t temp = *LoRa_Service_Config_Get();
-        temp.net_id = override_net_id;
-        LoRa_Service_Config_Set(&temp);
+        LoRa_Config_t temp_cfg = *LoRa_Service_Config_Get();
+        temp_cfg.net_id = override_net_id;
+        LoRa_Service_Config_Set(&temp_cfg);
     }
     
-    // 4. 初始化 Manager
-    LoRa_Manager_Init(LoRa_Service_Config_Get(), _On_Mgr_RxData);
+    const LoRa_Config_t *cfg = LoRa_Service_Config_Get();
     
-    // 5. 初始化 Driver (阻塞)
-    // 注意：这里依然调用旧的 Drv_Init，Step 4 会替换它
-    if (LoRa_Driver_Init(LoRa_Service_Config_Get())) {
-        LoRa_Service_NotifyEvent(LORA_EVENT_INIT_SUCCESS, NULL);
-    } else {
-        while(1); // 死循环报警
+    // 2. 初始化驱动 (阻塞式，会进行 AT 握手)
+    if (!LoRa_Driver_Init(cfg)) {
+        LORA_LOG("[SVC] Driver Init Failed!\r\n");
+        // 这里可以触发一个系统级错误事件
+    }
+    
+    // 3. 初始化管理器
+    LoRa_Manager_Init(cfg, _Service_OnRecv);
+    
+    // 4. 初始化监视器
+    LoRa_Service_Monitor_Init();
+    
+    // 5. 通知应用层
+    if (s_AppCb && s_AppCb->OnEvent) {
+        s_AppCb->OnEvent(LORA_EVENT_INIT_SUCCESS, NULL);
     }
 }
 
 void LoRa_Service_Run(void) {
-    // 1. 运行监视器 (软件看门狗)
-    LoRa_Service_Monitor_Run();
+    // 1. 驱动层轮询 (如需)
+    // LoRa_Driver_Run(); 
     
-    // 2. 运行原有逻辑
+    // 2. 管理层轮询 (核心协议栈)
     LoRa_Manager_Run();
-		
+    
+    // 3. 监视器轮询 (看门狗)
+    LoRa_Service_Monitor_Run();
 }
 
-bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id) {
+// [修改] 增加 opt 参数并透传
+bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt) {
     LORA_CHECK(data && len > 0, false);
-    return LoRa_Manager_Send(data, len, target_id);
+    // 透传给 Manager 层
+    return LoRa_Manager_Send(data, len, target_id, opt);
+}
+
+uint32_t LoRa_Service_GetSleepDuration(void) {
+    return LoRa_Manager_GetSleepDuration();
 }
 
 void LoRa_Service_FactoryReset(void) {
     LoRa_Service_Config_FactoryReset();
-    if (g_cb.SaveConfig) g_cb.SaveConfig(LoRa_Service_Config_Get());
-    LoRa_Service_NotifyEvent(LORA_EVENT_FACTORY_RESET, NULL);
-    if (g_cb.SystemReset) g_cb.SystemReset();
+    if (s_AppCb && s_AppCb->OnEvent) {
+        s_AppCb->OnEvent(LORA_EVENT_FACTORY_RESET, NULL);
+    }
+    // 建议重启
+    if (s_AppCb && s_AppCb->SystemReset) {
+        s_AppCb->SystemReset();
+    }
 }
 
 const LoRa_Config_t* LoRa_Service_GetConfig(void) {
@@ -100,30 +114,12 @@ const LoRa_Config_t* LoRa_Service_GetConfig(void) {
 }
 
 void LoRa_Service_SetConfig(const LoRa_Config_t *cfg) {
-    LORA_CHECK_VOID(cfg);
     LoRa_Service_Config_Set(cfg);
-    if (g_cb.SaveConfig) g_cb.SaveConfig(cfg);
+    // 注意：修改配置后通常需要重启或重新初始化驱动才能生效
 }
 
 void LoRa_Service_NotifyEvent(LoRa_Event_t event, void *arg) {
-    if (g_cb.OnEvent) g_cb.OnEvent(event, arg);
-}
-
-// [新增] 综合计算休眠时间
-uint32_t LoRa_Service_GetSleepDuration(void) {
-    // 1. 硬件层一票否决
-    if (LoRa_Driver_IsBusy()) {
-        return 0; 
+    if (s_AppCb && s_AppCb->OnEvent) {
+        s_AppCb->OnEvent(event, arg);
     }
-
-    // 2. 逻辑层计算剩余时间
-    uint32_t logic_sleep = LoRa_Manager_GetSleepDuration();
-    
-    // 3. 安全余量扣除 (Safety Margin)
-    // 唤醒和恢复时钟需要时间，建议扣除 2ms
-    if (logic_sleep > 2 && logic_sleep != LORA_TIMEOUT_INFINITE) {
-        return logic_sleep - 2;
-    }
-    
-    return logic_sleep;
 }

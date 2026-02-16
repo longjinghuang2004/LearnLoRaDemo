@@ -2,9 +2,7 @@
   ******************************************************************************
   * @file    main.c
   * @author  LoRaPlat Team
-  * @brief   LoRaPlat V3.8 综合测试例程 (遥控 LED + 安全指令)
-  * @version V1.0
-  * @date    2023-10-27
+  * @brief   LoRaPlat V3.9 综合测试例程 (全双工 Echo 测试)
   ******************************************************************************
   */
 
@@ -26,16 +24,10 @@ volatile uint8_t g_TimeoutFlag;
 extern void Demo_OSAL_Init(void);
 
 // ============================================================================
-// [配置区域] 请根据烧录目标修改此处
+// [配置区域]
 // ============================================================================
-// 1 = 主机 (Master): 发送控制指令 (STM32)
-// 2 = 从机 (Slave):  执行动作 (ESP32)
-#define DEVICE_ROLE     1
-
-// 目标设备 ID (主机发给从机，从机发给主机)
-#define TARGET_ID       ((DEVICE_ROLE == 1) ? 2 : 1)
-
-// 默认安全令牌 (用于 CMD 指令鉴权)
+#define DEVICE_ROLE     1 // 1 = STM32 (Master)
+#define TARGET_ID       2 // 2 = ESP32 (Slave)
 #define DEFAULT_TOKEN   0x00000000
 
 // ============================================================================
@@ -62,20 +54,22 @@ void Adapter_SystemReset(void)                    { NVIC_SystemReset(); }
 
 // [核心] 接收数据回调
 void Adapter_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta) {
-    // 1. 打印日志 (此时 data 已经是解密后的明文)
-    // 注意：data 未必以 \0 结尾，使用 %.*s 格式化
+    // 打印接收到的回传数据
     Serial_Printf("[RX] From 0x%04X (RSSI:%d): %.*s\r\n", src_id, meta->rssi, len, data);
     
-    // 2. 业务逻辑处理 (Business Logic)
-    // 这里主要是接收 ESP32 的回传 (Echo)
-    // 如果收到 "red", "blue" 等，说明 ESP32 执行成功了
+    // LED2 翻转表示收到数据
+    LED2_Turn();
 }
 
 // 事件回调
 void Adapter_OnEvent(LoRa_Event_t event, void *arg) {
     switch(event) {
         case LORA_EVENT_INIT_SUCCESS: Serial_Printf("[EVT] LoRa Init OK. Role: %d\r\n", DEVICE_ROLE); break;
-        case LORA_EVENT_TX_FINISHED:  Serial_Printf("[EVT] TX Finished (ACK OK).\r\n"); LED1_Turn(); break; // LED1 闪烁表示发送成功
+        case LORA_EVENT_TX_FINISHED:  
+            // 这里表示 STM32 发出的数据，ESP32 已经回了 ACK
+            Serial_Printf("[EVT] TX Finished (ACK OK).\r\n"); 
+            LED1_Turn(); // LED1 翻转表示发送成功
+            break; 
         case LORA_EVENT_TX_FAILED:    Serial_Printf("[EVT] TX Failed (Timeout).\r\n"); break;
         case LORA_EVENT_BIND_SUCCESS: Serial_Printf("[EVT] Bind ID: %d\r\n", *(uint16_t*)arg); break;
         default: break;
@@ -98,14 +92,14 @@ void Check_First_Run(void) {
         Serial_Printf("[SYS] First Run, Writing Defaults...\r\n");
         memset(&cfg, 0, sizeof(cfg));
         cfg.magic = LORA_CFG_MAGIC;
-        cfg.net_id = DEVICE_ROLE; // 1 or 2
+        cfg.net_id = DEVICE_ROLE; 
         cfg.group_id = 100;
         cfg.token = DEFAULT_TOKEN;
         cfg.hw_addr = 0;
         cfg.channel = 23;
-        cfg.power = 0; // 11dBm
-        cfg.air_rate = 5; // 19.2k
-        cfg.tmode = 0; // Transparent
+        cfg.power = 0; 
+        cfg.air_rate = 5; 
+        cfg.tmode = 0; 
         Flash_WriteLoRaConfig(&cfg);
         NVIC_SystemReset();
     }
@@ -121,17 +115,16 @@ int main(void)
     LED_Init();
     Serial_Init();
     Demo_OSAL_Init();
-    Check_First_Run(); // 检查 Flash
+    Check_First_Run(); 
     
-    // 注册加密算法 (可选)
+    // 注册加密算法
     LoRa_Manager_RegisterCipher(&my_cipher);
     
     // 启动协议栈
-    // 强制覆盖 NetID 以匹配当前 Role (方便调试，实际产品可去掉)
     LoRa_Service_Init(&my_adapter, DEVICE_ROLE); 
 
-    Serial_Printf("\r\n=== LoRaPlat V3.8 Demo (ID: %d) ===\r\n", DEVICE_ROLE);
-    Serial_Printf("Commands: 'red', 'blue', 'white', 'off'\r\n");
+    Serial_Printf("\r\n=== LoRaPlat V3.9 Echo Test (ID: %d) ===\r\n", DEVICE_ROLE);
+    Serial_Printf("Type ANY text to send (e.g., 'hello', 'red')\r\n");
     Serial_Printf("Admin: 'CMD:00000000:INFO'\r\n");
 
     char input_buf[128];
@@ -146,50 +139,30 @@ int main(void)
         if (Serial_GetRxPacket(input_buf, sizeof(input_buf))) {
             Serial_Printf("[PC] Input: %s\r\n", input_buf);
             
-            // --- 颜色控制指令 (发送给 ESP32) ---
-            // 使用 strncmp 避免回车换行符干扰
-            if (strncmp(input_buf, "red", 3) == 0) {
-                if (LoRa_Service_Send((uint8_t*)"red", 3, TARGET_ID))
-                    Serial_Printf(" -> Sending 'red'...\r\n");
-                else
-                    Serial_Printf(" -> Send Failed (Busy)\r\n");
-            }
-            else if (strncmp(input_buf, "blue", 4) == 0 || strncmp(input_buf, "bule", 4) == 0) {
-                if (LoRa_Service_Send((uint8_t*)"blue", 4, TARGET_ID))
-                    Serial_Printf(" -> Sending 'blue'...\r\n");
-                else
-                    Serial_Printf(" -> Send Failed (Busy)\r\n");
-            }
-            else if (strncmp(input_buf, "white", 5) == 0) {
-                if (LoRa_Service_Send((uint8_t*)"white", 5, TARGET_ID))
-                    Serial_Printf(" -> Sending 'white'...\r\n");
-                else
-                    Serial_Printf(" -> Send Failed (Busy)\r\n");
-            }
-            else if (strncmp(input_buf, "off", 3) == 0) {
-                if (LoRa_Service_Send((uint8_t*)"off", 3, TARGET_ID))
-                    Serial_Printf(" -> Sending 'off'...\r\n");
-                else
-                    Serial_Printf(" -> Send Failed (Busy)\r\n");
-            }
-            
             // --- 本地管理指令 (配置自己) ---
-            // 格式: CMD:Token:Command
-            else if (strncmp(input_buf, "CMD:", 4) == 0) {
+            if (strncmp(input_buf, "CMD:", 4) == 0) {
                 if (LoRa_Service_Command_Process(input_buf))
                     Serial_Printf(" -> Admin Cmd Executed.\r\n");
                 else
                     Serial_Printf(" -> Admin Cmd Failed.\r\n");
             }
+            // --- 通用数据发送 (发送给 ESP32) ---
             else {
-                Serial_Printf(" -> Unknown Command.\r\n");
+                // [关键] 发送任意文本，并要求 ACK (LORA_OPT_CONFIRMED)
+                // 这样会触发：STM32发 -> ESP32回ACK
+                if (LoRa_Service_Send((uint8_t*)input_buf, strlen(input_buf), TARGET_ID, LORA_OPT_CONFIRMED)) {
+                    Serial_Printf(" -> Sending '%s' (Confirmed)...\r\n", input_buf);
+                } else {
+                    Serial_Printf(" -> Send Failed (Busy)\r\n");
+                }
             }
         }
 
-        // 3. 心跳 (仅 LED1 闪烁，LED2 用于业务指示)
-        if (GetTick() - last_heartbeat > 1000) {
+        // 3. 心跳 (仅用于证明主循环在跑)
+        if (GetTick() - last_heartbeat > 2000) {
             last_heartbeat = GetTick();
-            LED1_Turn(); 
+            // Serial_Printf("."); // 可选：打印心跳点
         }
     }
 }
+

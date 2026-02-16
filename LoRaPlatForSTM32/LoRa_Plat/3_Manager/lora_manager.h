@@ -76,9 +76,11 @@ void LoRa_Manager_Run(void);
  * @param  payload: 数据内容
  * @param  len: 数据长度
  * @param  target_id: 目标逻辑 ID
+ * @param  opt: 发送选项 [新增]
  * @return true=成功入队/发送, false=忙或错误
  */
-bool LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id);
+bool LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt);
+
 
 /**
  * @brief  查询是否忙碌

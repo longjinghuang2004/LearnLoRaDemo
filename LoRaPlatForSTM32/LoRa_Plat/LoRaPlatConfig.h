@@ -91,7 +91,7 @@ typedef struct {
  *        false: 关闭。发送即忘（Fire and Forget）。适合对实时性要求高、允许少量丢包
  *               或通过上层业务逻辑保证可靠性的场景（如高频传感器数据上报）。
  */
-#define LORA_ENABLE_ACK         true
+//#define LORA_ENABLE_ACK         true
 
 /**
  * @brief CRC16 数据校验开关
@@ -197,5 +197,9 @@ typedef struct {
 #define LORA_BROADCAST_INTERVAL 50
 
 
+// 在 LoRaPlatConfig.h 底部添加
+typedef struct {
+    bool NeedAck;
+} LoRa_SendOpt_t;
 
 #endif // __LORA_PLAT_CONFIG_H

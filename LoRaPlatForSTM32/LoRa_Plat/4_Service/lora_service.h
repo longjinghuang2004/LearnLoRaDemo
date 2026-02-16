@@ -10,6 +10,11 @@
 //                    1. 数据结构定义
 // ============================================================
 
+
+// [新增] 常用发送选项宏
+#define LORA_OPT_CONFIRMED      (LoRa_SendOpt_t){ .NeedAck = true }
+#define LORA_OPT_UNCONFIRMED    (LoRa_SendOpt_t){ .NeedAck = false }
+
 typedef struct {
     int16_t rssi; 
     int8_t  snr;  
@@ -50,7 +55,8 @@ typedef struct {
 
 void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_id);
 void LoRa_Service_Run(void);
-bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id);
+// [修改] 必须增加 LoRa_SendOpt_t opt 参数
+bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt);
 
 // [新增] 获取系统建议休眠时长 (Tickless 接口)
 uint32_t LoRa_Service_GetSleepDuration(void);

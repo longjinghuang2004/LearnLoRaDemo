@@ -17,10 +17,12 @@ static const LoRa_Cipher_t *s_Cipher = NULL;
 
 // [新增] 发送缓存队列 (简单的结构体数组环形队列)
 #define TX_PACKET_QUEUE_SIZE 4 
+
 typedef struct {
     uint8_t  payload[LORA_MAX_PAYLOAD_LEN];
     uint16_t len;
     uint16_t target_id;
+    LoRa_SendOpt_t opt; // [新增] 保存发送选项
 } TxRequest_t;
 
 static TxRequest_t s_TxQueue[TX_PACKET_QUEUE_SIZE];
@@ -51,7 +53,7 @@ void LoRa_Manager_RegisterCipher(const LoRa_Cipher_t *cipher) {
     s_Cipher = cipher;
 }
 
-// [新增] 尝试从队列中取出并发送
+// [修改] 尝试从队列中取出并发送
 static void _ProcessTxQueue(void) {
     // 1. 如果 FSM 忙，不能发送，直接退出
     if (LoRa_Manager_FSM_IsBusy()) return;
@@ -64,7 +66,9 @@ static void _ProcessTxQueue(void) {
     
     // 4. 尝试发送给 FSM
     uint8_t tx_stack_buf[LORA_MAX_PAYLOAD_LEN + 32];
-    if (LoRa_Manager_FSM_Send(req->payload, req->len, req->target_id, tx_stack_buf, sizeof(tx_stack_buf))) {
+    
+    // [修改] 将 req->opt 传递给 FSM
+    if (LoRa_Manager_FSM_Send(req->payload, req->len, req->target_id, req->opt, tx_stack_buf, sizeof(tx_stack_buf))) {
         // 发送成功，移动 Tail
         s_TxQ_Tail = (s_TxQ_Tail + 1) % TX_PACKET_QUEUE_SIZE;
         s_TxQ_Count--;
@@ -97,11 +101,12 @@ void LoRa_Manager_Run(void) {
     // 3. 运行状态机
     LoRa_Manager_FSM_Run(s_RxWorkspace, RX_WORKSPACE_SIZE);
     
-    // 4. [新增] 处理发送队列
+    // 4. 处理发送队列
     _ProcessTxQueue();
 }
 
-bool LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id) {
+// [修改] 增加 opt 参数
+bool LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt) {
     // 1. 加密处理
     uint8_t final_payload[LORA_MAX_PAYLOAD_LEN];
     uint16_t final_len = len;
@@ -115,7 +120,7 @@ bool LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id)
         memcpy(final_payload, payload, len);
     }
 
-    // 2. [修改] 尝试入队
+    // 2. 尝试入队
     // 临界区保护
     uint32_t ctx = OSAL_EnterCritical();
     
@@ -129,6 +134,7 @@ bool LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id)
     memcpy(req->payload, final_payload, final_len);
     req->len = final_len;
     req->target_id = target_id;
+    req->opt = opt; // [新增] 保存选项
     
     s_TxQ_Head = (s_TxQ_Head + 1) % TX_PACKET_QUEUE_SIZE;
     s_TxQ_Count++;
