@@ -1,0 +1,4817 @@
+## Directory Structure for `LoRaPlatDevelop`
+
+```
+- LoRaPlatDevelop/
+    - LoRaPlatForESP32S3/
+        - components/
+            - bsp_button/
+                - CMakeLists.txt
+            - bsp_led/
+                - CMakeLists.txt
+            - loraplat/
+                - src/
+                    - 0_OSAL/
+                        - lora_osal.c
+                        - lora_osal.h
+                        - lora_osal_esp32.c
+                - CMakeLists.txt
+        - main/
+            - CMakeLists.txt
+            - main.c
+        - CMakeLists.txt
+        - pin_config.txt
+    - LoRaPlatForSTM32/
+        - LoRa_Plat/
+            - 0_OSAL/
+                - lora_osal.c
+                - lora_osal.h
+            - 0_Utils/
+                - lora_crc16.c
+                - lora_crc16.h
+                - lora_ring_buffer.c
+                - lora_ring_buffer.h
+            - 1_Port/
+                - lora_port.h
+                - lora_port_stm32f10x.c
+            - 2_Driver/
+                - lora_at_command_engine.c
+                - lora_at_command_engine.h
+                - lora_driver.c
+                - lora_driver.h
+                - lora_driver_config.c
+                - lora_driver_core.c
+            - 3_Manager/
+                - lora_manager.c
+                - lora_manager.h
+                - lora_manager_buffer.c
+                - lora_manager_buffer.h
+                - lora_manager_fsm.c
+                - lora_manager_fsm.h
+                - lora_manager_protocol.c
+                - lora_manager_protocol.h
+            - 4_Service/
+                - lora_service.c
+                - lora_service.h
+                - lora_service_command.c
+                - lora_service_command.h
+                - lora_service_config.c
+                - lora_service_config.h
+                - lora_service_monitor.c
+                - lora_service_monitor.h
+            - LoRaPlatConfig.h
+        - User/
+            - lora_demo_osal.c
+            - main.c
+        - Pin_Config.txt
+    - stm32端双机互传测试main文件.txt
+```
+
+
+---
+
+## File Contents
+
+<project_files>
+<file path="LoRaPlatForESP32S3\CMakeLists.txt">
+```txt
+# The following five lines of boilerplate have to be in your project's
+# CMakeLists in this exact order for cmake to work correctly
+cmake_minimum_required(VERSION 3.16)
+
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(LoRaPlatForESP32S3)
+
+```
+</file>
+<file path="LoRaPlatForESP32S3\components\bsp_button\CMakeLists.txt">
+```txt
+# components/bsp_button/CMakeLists.txt
+
+idf_component_register(
+    SRCS "src/Key.c" "src/KeyManager.c" "src/key_port_esp32.c"
+    INCLUDE_DIRS "include"
+    REQUIRES driver esp_timer  # <--- 在这里添加 esp_timer
+)
+
+```
+</file>
+<file path="LoRaPlatForESP32S3\components\bsp_led\CMakeLists.txt">
+```txt
+idf_component_register(
+    SRCS "src/bsp_led.c"
+    INCLUDE_DIRS "include"
+    REQUIRES led_strip  # 依赖官方组件
+)
+
+```
+</file>
+<file path="LoRaPlatForESP32S3\components\loraplat\CMakeLists.txt">
+```txt
+# 确保这一行里的每一个文件，都在你的硬盘上真实存在！
+idf_component_register(
+    SRCS 
+        "src/0_OSAL/lora_osal.c"        # <--- 必须有！
+        "src/0_OSAL/lora_osal_esp32.c"  # <--- 必须有！
+        "src/0_Utils/lora_crc16.c"
+        "src/0_Utils/lora_ring_buffer.c"
+        "src/1_Port/lora_port_esp32.c"
+        "src/2_Driver/lora_driver.c"
+        "src/2_Driver/lora_driver_core.c"
+        "src/2_Driver/lora_driver_config.c"
+        "src/2_Driver/lora_at_command_engine.c"
+        "src/3_Manager/lora_manager.c"
+        "src/3_Manager/lora_manager_buffer.c"
+        "src/3_Manager/lora_manager_fsm.c"
+        "src/3_Manager/lora_manager_protocol.c"
+        "src/4_Service/lora_service.c"
+        "src/4_Service/lora_service_config.c"
+        "src/4_Service/lora_service_command.c"
+        "src/4_Service/lora_service_monitor.c"
+
+    INCLUDE_DIRS 
+        "src"
+        "src/0_OSAL"
+        "src/0_Utils"
+        "src/1_Port"
+        "src/2_Driver"
+        "src/3_Manager"
+        "src/4_Service"
+
+    REQUIRES 
+        driver
+        esp_timer
+        log
+        nvs_flash # 如果你在代码里用了 nvs，最好加上
+)
+
+```
+</file>
+<file path="LoRaPlatForESP32S3\components\loraplat\src\0_OSAL\lora_osal.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_osal.c
+  * @author  LoRaPlat Team
+  * @brief   操作系统抽象层 (OSAL) 核心实现 
+  ******************************************************************************
+  */
+
+#include "lora_osal.h"
+#include <stdio.h> 
+
+// 内部偏移量变量
+static volatile uint32_t s_TickOffset = 0;
+
+// ============================================================
+//                    1. 默认桩函数 (Safety Stubs)
+// ============================================================
+
+static uint32_t Stub_GetTick(void) { return 0; }
+static void     Stub_DelayMs(uint32_t ms) { (void)ms; }
+
+// [关键] 默认桩函数签名必须匹配接口定义
+static uint32_t Stub_EnterCritical(void) { return 0; }
+static void     Stub_ExitCritical(uint32_t ctx) { (void)ctx; }
+
+static void*    Stub_Malloc(uint32_t size) { (void)size; return NULL; }
+static void     Stub_Free(void* ptr) { (void)ptr; }
+static void     Stub_LogHex(const char *tag, const void *data, uint16_t len) { (void)tag; (void)data; (void)len; }
+
+static LoRa_OSAL_Interface_t s_Impl = {
+    .GetTick       = Stub_GetTick,
+    .DelayMs       = Stub_DelayMs,
+    .EnterCritical = Stub_EnterCritical,
+    .ExitCritical  = Stub_ExitCritical,
+    .Log           = NULL, 
+    .LogHex        = Stub_LogHex,
+    .Malloc        = Stub_Malloc,
+    .Free          = Stub_Free
+};
+
+static bool s_IsInit = false;
+
+// ============================================================
+//                    2. 初始化
+// ============================================================
+
+bool LoRa_OSAL_Init(const LoRa_OSAL_Interface_t *impl) {
+    if (!impl) return false; 
+    
+    if (!impl->GetTick || !impl->DelayMs || !impl->EnterCritical || !impl->ExitCritical) {
+        return false; 
+    }
+    
+    s_Impl.GetTick       = impl->GetTick;
+    s_Impl.DelayMs       = impl->DelayMs;
+    s_Impl.EnterCritical = impl->EnterCritical;
+    s_Impl.ExitCritical  = impl->ExitCritical;
+    
+    if (impl->Log)    s_Impl.Log    = impl->Log;
+    if (impl->Malloc) s_Impl.Malloc = impl->Malloc;
+    if (impl->Free)   s_Impl.Free   = impl->Free;
+    
+    if (impl->LogHex) {
+        s_Impl.LogHex = impl->LogHex;
+    } 
+    
+    s_IsInit = true;
+    return true;
+}
+
+// ============================================================
+//                    3. 核心包装器 (供业务层调用)
+// ============================================================
+
+uint32_t _osal_get_tick(void) { return s_Impl.GetTick(); }
+void     _osal_delay_ms(uint32_t ms) { s_Impl.DelayMs(ms); }
+
+void*    _osal_malloc(uint32_t size) { return s_Impl.Malloc(size); }
+void     _osal_free(void* ptr) { s_Impl.Free(ptr); }
+
+// [关键] 实现临界区包装器
+uint32_t _osal_enter_critical(void) { 
+    return s_Impl.EnterCritical(); 
+}
+
+void _osal_exit_critical(uint32_t ctx) { 
+    s_Impl.ExitCritical(ctx); 
+}
+
+void LoRa_OSAL_CompensateTick(uint32_t ms) {
+    if (ms == 0) return;
+    uint32_t ctx = s_Impl.EnterCritical();
+    s_TickOffset += ms;
+    s_Impl.ExitCritical(ctx);
+}
+
+// ============================================================
+//                    4. 日志包装器
+// ============================================================
+
+#if (defined(LORA_DEBUG_PRINT) && LORA_DEBUG_PRINT == 1)
+
+void _osal_log_wrapper(const char *fmt, ...) {
+    if (!s_IsInit || s_Impl.Log == NULL) return;
+    
+    va_list args;
+    va_start(args, fmt);
+    s_Impl.Log(fmt, args);
+    va_end(args);
+}
+
+void _osal_hexdump_wrapper(const char *tag, const void *data, uint16_t len) {
+    if (!s_IsInit) return;
+
+    if (s_Impl.LogHex != Stub_LogHex) {
+        s_Impl.LogHex(tag, data, len);
+        return;
+    }
+
+    if (s_Impl.Log == NULL) return;
+
+    const uint8_t *p = (const uint8_t*)data;
+    char buf[64]; 
+    
+    _osal_log_wrapper("%s (Len=%d): ", tag, len);
+
+    #define CHUNK_SIZE 16
+    for (uint16_t i = 0; i < len; i += CHUNK_SIZE) {
+        uint16_t chunk = (len - i < CHUNK_SIZE) ? (len - i) : CHUNK_SIZE;
+        int pos = 0;
+        for (uint16_t j = 0; j < chunk; j++) {
+            pos += sprintf(buf + pos, "%02X ", p[i + j]);
+        }
+        _osal_log_wrapper("%s", buf);
+    }
+    _osal_log_wrapper("\r\n");
+}
+
+#endif
+
+```
+</file>
+<file path="LoRaPlatForESP32S3\components\loraplat\src\0_OSAL\lora_osal.h">
+```h
+#ifndef __LORA_OSAL_H
+#define __LORA_OSAL_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdarg.h>
+#include "LoRaPlatConfig.h" 
+
+// ============================================================
+//                    1. 接口定义
+// ============================================================
+
+typedef struct {
+    // --- 核心服务 (必须提供) ---
+    uint32_t (*GetTick)(void);          
+    void     (*DelayMs)(uint32_t ms);   
+    
+    /**
+     * @brief 进入临界区
+     * @return 中断状态上下文 (STM32需要保存PRIMASK，ESP32返回0即可)
+     */
+    uint32_t (*EnterCritical)(void);    
+    
+    /**
+     * @brief 退出临界区
+     * @param ctx 进入时保存的中断状态上下文
+     */
+    void     (*ExitCritical)(uint32_t ctx);     
+    
+    // --- 调试服务 (可选) ---
+    void     (*Log)(const char *fmt, va_list args);
+    void     (*LogHex)(const char *tag, const void *data, uint16_t len);
+    
+    // --- 内存服务 (可选) ---
+    void*    (*Malloc)(uint32_t size);
+    void     (*Free)(void* ptr);
+    
+} LoRa_OSAL_Interface_t;
+
+// ============================================================
+//                    2. 初始化 API
+// ============================================================
+
+bool LoRa_OSAL_Init(const LoRa_OSAL_Interface_t *impl);
+
+// ============================================================
+//                    3. 业务调用宏 (增强版)
+// ============================================================
+
+// --- 核心函数原型声明 (解决 implicit declaration 警告) ---
+uint32_t _osal_get_tick(void);
+void     _osal_delay_ms(uint32_t ms);
+void*    _osal_malloc(uint32_t size);
+void     _osal_free(void* ptr);
+
+// [关键修复] 显式声明临界区包装函数
+uint32_t _osal_enter_critical(void);
+void     _osal_exit_critical(uint32_t ctx);
+
+// 补偿函数
+void LoRa_OSAL_CompensateTick(uint32_t ms);
+
+// --- 宏定义映射 ---
+#define OSAL_GetTick()          _osal_get_tick()
+#define OSAL_DelayMs(ms)        _osal_delay_ms(ms)
+#define OSAL_Malloc(sz)         _osal_malloc(sz)
+#define OSAL_Free(ptr)          _osal_free(ptr)
+
+// [关键修复] 这里的宏现在调用的是有原型的函数
+#define OSAL_EnterCritical()    _osal_enter_critical()
+#define OSAL_ExitCritical(x)    _osal_exit_critical(x)
+        
+// --- 日志宏 ---
+#if (defined(LORA_DEBUG_PRINT) && LORA_DEBUG_PRINT == 1)
+    void _osal_log_wrapper(const char *fmt, ...);
+    void _osal_hexdump_wrapper(const char *tag, const void *data, uint16_t len);
+    
+    #define LORA_LOG(...)       _osal_log_wrapper(__VA_ARGS__)
+    #define LORA_HEXDUMP(t,d,l) _osal_hexdump_wrapper(t,d,l)
+#else
+    #define LORA_LOG(...)       do {} while (0)
+    #define LORA_HEXDUMP(t,d,l) do {} while (0)
+#endif
+
+// --- 参数检查宏 ---
+#if (defined(LORA_DEBUG_PRINT) && LORA_DEBUG_PRINT == 1)
+    #define LORA_CHECK(expr, ret_val) \
+        do { \
+            if (!(expr)) { \
+                LORA_LOG("[ERR] %s:%d Check Failed: "#expr"\r\n", __func__, __LINE__); \
+                return ret_val; \
+            } \
+        } while(0)
+        
+    #define LORA_CHECK_VOID(expr) \
+        do { \
+            if (!(expr)) { \
+                LORA_LOG("[ERR] %s:%d Check Failed: "#expr"\r\n", __func__, __LINE__); \
+                return; \
+            } \
+        } while(0)
+#else
+    #define LORA_CHECK(expr, ret_val) \
+        do { \
+            if (!(expr)) { \
+                return ret_val; \
+            } \
+        } while(0)
+
+    #define LORA_CHECK_VOID(expr) \
+        do { \
+            if (!(expr)) { \
+                return; \
+            } \
+        } while(0)
+#endif
+
+#endif // __LORA_OSAL_H
+
+```
+</file>
+<file path="LoRaPlatForESP32S3\components\loraplat\src\0_OSAL\lora_osal_esp32.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_osal_esp32.c
+  * @author  LoRaPlat Team
+  * @brief   OSAL 接口适配层 (ESP32-S3 FreeRTOS 版)
+  ******************************************************************************
+  */
+
+#include "lora_osal.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_timer.h"
+#include "esp_log.h"
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#include <stdlib.h> // for malloc/free
+
+static const char *TAG = "LoRa_OSAL";
+
+// ESP32 是双核系统，必须使用自旋锁保护临界区
+static portMUX_TYPE s_lora_spinlock = portMUX_INITIALIZER_UNLOCKED;
+
+// ============================================================
+//                    1. 接口适配实现
+// ============================================================
+
+// 适配 GetTick (ms)
+static uint32_t ESP32_GetTick(void) {
+    // esp_timer_get_time() 返回微秒，除以 1000 转毫秒
+    return (uint32_t)(esp_timer_get_time() / 1000ULL);
+}
+
+// 适配 DelayMs
+static void ESP32_DelayMs(uint32_t ms) {
+    // 挂起当前任务，释放 CPU
+    vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
+// [关键] 适配 EnterCritical
+// 签名必须是: uint32_t (*)(void)
+static uint32_t ESP32_EnterCritical(void) {
+    // 进入临界区 (关中断 + 自旋锁)
+    // FreeRTOS 内部支持嵌套调用，不需要我们手动保存状态
+    taskENTER_CRITICAL(&s_lora_spinlock);
+    
+    // 返回 0 即可，因为 ESP32 不需要像 STM32 那样保存 PRIMASK
+    return 0; 
+}
+
+// [关键] 适配 ExitCritical
+// 签名必须是: void (*)(uint32_t)
+static void ESP32_ExitCritical(uint32_t ctx) {
+    (void)ctx; // 忽略参数，因为 FreeRTOS 不需要恢复外部保存的状态
+    
+    // 退出临界区
+    taskEXIT_CRITICAL(&s_lora_spinlock);
+}
+
+// 适配日志打印
+static void ESP32_Log(const char *fmt, va_list args) {
+    // 使用临时缓冲区格式化字符串
+    char buf[256];
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    
+    // 移除末尾可能的换行符，因为 ESP_LOGI 会自动添加换行
+    size_t len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\n') {
+        buf[len - 1] = '\0';
+    }
+    
+    ESP_LOGI(TAG, "%s", buf);
+}
+
+// 适配 HexDump
+static void ESP32_LogHex(const char *tag, const void *data, uint16_t len) {
+    ESP_LOG_BUFFER_HEX(tag, data, len);
+}
+
+// 适配 Malloc
+static void* ESP32_Malloc(uint32_t size) {
+    return malloc(size);
+}
+
+// 适配 Free
+static void ESP32_Free(void* ptr) {
+    free(ptr);
+}
+
+// ============================================================
+//                    2. 接口注册结构体
+// ============================================================
+
+static const LoRa_OSAL_Interface_t s_OsalImpl = {
+    .GetTick       = ESP32_GetTick,
+    .DelayMs       = ESP32_DelayMs,
+    .EnterCritical = ESP32_EnterCritical, // 类型完全匹配
+    .ExitCritical  = ESP32_ExitCritical,  // 类型完全匹配
+    .Log           = ESP32_Log,
+    .LogHex        = ESP32_LogHex,
+    .Malloc        = ESP32_Malloc,
+    .Free          = ESP32_Free
+};
+
+// ============================================================
+//                    3. 公开初始化函数
+// ============================================================
+
+// 在 main.c 中调用此函数
+void LoRa_OSAL_Init_ESP32(void) {
+    LoRa_OSAL_Init(&s_OsalImpl);
+}
+
+```
+</file>
+<file path="LoRaPlatForESP32S3\main\CMakeLists.txt">
+```txt
+idf_component_register(
+    SRCS "main.c"
+    INCLUDE_DIRS "."
+    # 依赖我们自定义的组件和系统组件
+    REQUIRES loraplat bsp_led bsp_button nvs_flash
+)
+
+```
+</file>
+<file path="LoRaPlatForESP32S3\main\main.c">
+```c
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "nvs_flash.h"
+#include "driver/uart.h" // 用于配置串口缓冲
+
+// 引入组件头文件
+#include "bsp_led.h"
+#include "KeyManager.h"
+#include "Key.h"
+
+// 引入 LoRaPlat
+#include "lora_service.h"
+#include "lora_port.h"
+#include "lora_service_command.h" // [新增] 引入指令处理头文件
+
+static const char *TAG = "MAIN";
+
+// --- 引脚定义 ---
+#define PIN_WS2812      48
+#define PIN_BUTTON      21
+
+// --- 声明外部初始化函数 ---
+extern void LoRa_OSAL_Init_ESP32(void);
+
+// ============================================================
+//                    NVS 存储适配 (新增)
+// ============================================================
+
+#define NVS_NAMESPACE "lora_store"
+#define NVS_KEY_CFG   "sys_cfg"
+
+static void App_SaveConfig(const LoRa_Config_t *cfg) {
+    nvs_handle_t my_handle;
+    esp_err_t err;
+
+    // 1. 打开 NVS
+    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &my_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error (%s) opening NVS handle!", esp_err_to_name(err));
+        return;
+    }
+
+    // 2. 写入结构体 (Blob)
+    err = nvs_set_blob(my_handle, NVS_KEY_CFG, cfg, sizeof(LoRa_Config_t));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write config!");
+    } else {
+        // 3. 提交
+        err = nvs_commit(my_handle);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Config committed to NVS.");
+        }
+    }
+
+    // 4. 关闭
+    nvs_close(my_handle);
+}
+
+static void App_LoadConfig(LoRa_Config_t *cfg) {
+    nvs_handle_t my_handle;
+    esp_err_t err;
+
+    // 1. 打开 NVS
+    err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &my_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "NVS empty or open failed, using defaults.");
+        return;
+    }
+
+    // 2. 读取结构体
+    size_t required_size = sizeof(LoRa_Config_t);
+    err = nvs_get_blob(my_handle, NVS_KEY_CFG, cfg, &required_size);
+
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Config loaded from NVS.");
+    } else {
+        ESP_LOGW(TAG, "Failed to load config (First run?)");
+    }
+
+    // 3. 关闭
+    nvs_close(my_handle);
+}
+
+
+// ============================================================
+//                    1. LoRa 回调逻辑
+// ============================================================
+
+static void App_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta) {
+    ESP_LOGI(TAG, "[RX] From 0x%04X (RSSI:%d): %.*s", src_id, meta->rssi, len, data);
+
+    char cmd_buf[32];
+    if (len < sizeof(cmd_buf)) {
+        memcpy(cmd_buf, data, len);
+        cmd_buf[len] = '\0';
+    } else {
+        memcpy(cmd_buf, data, sizeof(cmd_buf) - 1);
+        cmd_buf[sizeof(cmd_buf) - 1] = '\0';
+    }
+
+    // --- LED 控制 ---
+    if (strncmp(cmd_buf, "red", 3) == 0) {
+        ESP_LOGI(TAG, "Action: LED RED");
+        BSP_LED_SetColor(50, 0, 0);
+    } 
+    else if (strncmp(cmd_buf, "blue", 4) == 0 || strncmp(cmd_buf, "bule", 4) == 0) { 
+        ESP_LOGI(TAG, "Action: LED BLUE");
+        BSP_LED_SetColor(0, 0, 50);
+    } 
+    else if (strncmp(cmd_buf, "white", 5) == 0) {
+        ESP_LOGI(TAG, "Action: LED WHITE");
+        BSP_LED_SetColor(20, 20, 20);
+    } 
+    else if (strncmp(cmd_buf, "off", 3) == 0) {
+        ESP_LOGI(TAG, "Action: LED OFF");
+        BSP_LED_SetColor(0, 0, 0);
+    }
+
+    // --- Echo 回传 ---
+    // 此时 LoRaPlat 已经有了发送队列，直接发送即可，无需手动延时
+    bool res = LoRa_Service_Send(data, len, src_id);
+    if (!res) {
+        ESP_LOGW(TAG, "Echo failed (Queue Full)");
+    }
+}
+
+static void App_OnEvent(LoRa_Event_t event, void *arg) {
+    switch(event) {
+        case LORA_EVENT_INIT_SUCCESS: 
+            ESP_LOGI(TAG, "LoRa Init Success!"); 
+            BSP_LED_SetColor(0, 20, 0);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            BSP_LED_SetColor(0, 0, 0);
+            break;
+        case LORA_EVENT_TX_FINISHED:
+            ESP_LOGD(TAG, "TX Finished (ACK OK)");
+            break;
+        case LORA_EVENT_TX_FAILED:
+            ESP_LOGW(TAG, "TX Failed (Timeout)");
+            break;
+        case LORA_EVENT_BIND_SUCCESS:
+            ESP_LOGI(TAG, "Bind Success! New NetID: %d", *(uint16_t*)arg);
+            break;
+        case LORA_EVENT_CONFIG_COMMIT:
+            ESP_LOGI(TAG, "Config Saved to Flash.");
+            break;
+        default: break;
+    }
+}
+
+static const LoRa_Callback_t s_LoRaCb = {
+    .SaveConfig = App_SaveConfig,  // <--- 注册保存函数
+    .LoadConfig = App_LoadConfig,  // <--- 注册加载函数
+    .GetRandomSeed = NULL,
+    .SystemReset = NULL,
+    .OnRecvData = App_OnRecvData,
+    .OnEvent = App_OnEvent
+};
+
+// ============================================================
+//                    2. 任务定义
+// ============================================================
+
+// --- LoRa 协议栈驱动任务 ---
+void lora_task_entry(void *arg) {
+    ESP_LOGI(TAG, "LoRa Task Started");
+    while (1) {
+        LoRa_Service_Run();
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+// --- [新增] PC 串口控制台任务 ---
+void console_task_entry(void *arg) {
+    char line[128];
+    
+    // 提示符
+    printf("\n");
+    printf("========================================\n");
+    printf("   ESP32 LoRaPlat Shell\n");
+    printf("   Try: CMD:00000000:INFO\n");
+    printf("========================================\n");
+
+    while (1) {
+        // 从 stdin (USB/UART0) 读取一行数据，阻塞式
+        if (fgets(line, sizeof(line), stdin) != NULL) {
+            // 去除换行符
+            char *pos = strchr(line, '\n');
+            if (pos) *pos = '\0';
+            pos = strchr(line, '\r');
+            if (pos) *pos = '\0';
+
+            if (strlen(line) > 0) {
+                printf("[Shell] Input: %s\n", line);
+
+                // 1. 尝试作为平台指令解析
+                if (strncmp(line, "CMD:", 4) == 0) {
+                    if (LoRa_Service_Command_Process(line)) {
+                        printf(" -> Command Executed OK.\n");
+                    } else {
+                        printf(" -> Command Failed (Auth Error or Format Error).\n");
+                    }
+                }
+                // 2. 也可以作为普通数据发送给 STM32 (ID=1)
+                else {
+                    printf(" -> Sending to STM32 (ID:1)...\n");
+                    LoRa_Service_Send((uint8_t*)line, strlen(line), 0x0001);
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(50)); // 让出 CPU
+    }
+}
+
+// ============================================================
+//                    3. 主入口
+// ============================================================
+void app_main(void)
+{
+    // 1. 系统初始化
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    // 2. BSP 初始化
+    BSP_LED_Init(PIN_WS2812);
+    
+    // 3. LoRa 初始化
+    LoRa_OSAL_Init_ESP32();
+    LoRa_Service_Init(&s_LoRaCb, 0x0002); // ESP32 ID = 2
+
+    // 4. 创建任务
+    // LoRa 核心任务 (优先级高一点)
+    xTaskCreate(lora_task_entry, "lora_task", 4096, NULL, 5, NULL);
+    
+    // [新增] 控制台任务 (优先级低一点)
+    xTaskCreate(console_task_entry, "console_task", 4096, NULL, 3, NULL);
+}
+
+```
+</file>
+<file path="LoRaPlatForESP32S3\pin_config.txt">
+```txt
+# ==============================================================================
+# [修正版] LoRaPlat Porting Pin Config (ESP32-S3)
+# 基于: ATK-LORA-01 用户手册 V1.3 (6 Pin 接口)
+# ==============================================================================
+
+# --- LoRa 模组 (UART1) ---
+# LoRa_TXD          : GPIO 18  (接 ESP32 RX)
+# LoRa_RXD          : GPIO 17  (接 ESP32 TX)
+# LoRa_MD0          : GPIO 16  (输出, 默认拉低 -> 通信模式)
+# LoRa_AUX          : GPIO 15  (输入, 模块输出高表示忙)
+# LoRa_VCC          : 3.3V
+# LoRa_GND          : GND
+
+# --- 验证外设 ---
+# Status_LED        : GPIO 48  (板载 WS2812)
+# Trigger_Button    : GPIO 21  (外接按钮)
+
+
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\0_OSAL\lora_osal.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_osal.c
+  * @author  LoRaPlat Team
+  * @brief   操作系统抽象层 (OSAL) 核心实现 V3.6
+  ******************************************************************************
+  */
+
+#include "lora_osal.h"
+#include <stdio.h> 
+
+// 内部偏移量变量
+static volatile uint32_t s_TickOffset = 0;
+
+// ============================================================
+//                    1. 默认桩函数 (Safety Stubs)
+// ============================================================
+
+static uint32_t Stub_GetTick(void) { return 0; }
+static void     Stub_DelayMs(uint32_t ms) { (void)ms; }
+
+// [关键] 默认桩函数签名必须匹配接口定义
+static uint32_t Stub_EnterCritical(void) { return 0; }
+static void     Stub_ExitCritical(uint32_t ctx) { (void)ctx; }
+
+static void*    Stub_Malloc(uint32_t size) { (void)size; return NULL; }
+static void     Stub_Free(void* ptr) { (void)ptr; }
+static void     Stub_LogHex(const char *tag, const void *data, uint16_t len) { (void)tag; (void)data; (void)len; }
+
+static LoRa_OSAL_Interface_t s_Impl = {
+    .GetTick       = Stub_GetTick,
+    .DelayMs       = Stub_DelayMs,
+    .EnterCritical = Stub_EnterCritical,
+    .ExitCritical  = Stub_ExitCritical,
+    .Log           = NULL, 
+    .LogHex        = Stub_LogHex,
+    .Malloc        = Stub_Malloc,
+    .Free          = Stub_Free
+};
+
+static bool s_IsInit = false;
+
+// ============================================================
+//                    2. 初始化
+// ============================================================
+
+bool LoRa_OSAL_Init(const LoRa_OSAL_Interface_t *impl) {
+    if (!impl) return false; 
+    
+    if (!impl->GetTick || !impl->DelayMs || !impl->EnterCritical || !impl->ExitCritical) {
+        return false; 
+    }
+    
+    s_Impl.GetTick       = impl->GetTick;
+    s_Impl.DelayMs       = impl->DelayMs;
+    s_Impl.EnterCritical = impl->EnterCritical;
+    s_Impl.ExitCritical  = impl->ExitCritical;
+    
+    if (impl->Log)    s_Impl.Log    = impl->Log;
+    if (impl->Malloc) s_Impl.Malloc = impl->Malloc;
+    if (impl->Free)   s_Impl.Free   = impl->Free;
+    
+    if (impl->LogHex) {
+        s_Impl.LogHex = impl->LogHex;
+    } 
+    
+    s_IsInit = true;
+    return true;
+}
+
+// ============================================================
+//                    3. 核心包装器 (供业务层调用)
+// ============================================================
+
+uint32_t _osal_get_tick(void) { return s_Impl.GetTick(); }
+void     _osal_delay_ms(uint32_t ms) { s_Impl.DelayMs(ms); }
+
+void*    _osal_malloc(uint32_t size) { return s_Impl.Malloc(size); }
+void     _osal_free(void* ptr) { s_Impl.Free(ptr); }
+
+// [关键] 实现临界区包装器
+uint32_t _osal_enter_critical(void) { 
+    return s_Impl.EnterCritical(); 
+}
+
+void _osal_exit_critical(uint32_t ctx) { 
+    s_Impl.ExitCritical(ctx); 
+}
+
+void LoRa_OSAL_CompensateTick(uint32_t ms) {
+    if (ms == 0) return;
+    uint32_t ctx = s_Impl.EnterCritical();
+    s_TickOffset += ms;
+    s_Impl.ExitCritical(ctx);
+}
+
+// ============================================================
+//                    4. 日志包装器
+// ============================================================
+
+#if (defined(LORA_DEBUG_PRINT) && LORA_DEBUG_PRINT == 1)
+
+void _osal_log_wrapper(const char *fmt, ...) {
+    if (!s_IsInit || s_Impl.Log == NULL) return;
+    
+    va_list args;
+    va_start(args, fmt);
+    s_Impl.Log(fmt, args);
+    va_end(args);
+}
+
+void _osal_hexdump_wrapper(const char *tag, const void *data, uint16_t len) {
+    if (!s_IsInit) return;
+
+    if (s_Impl.LogHex != Stub_LogHex) {
+        s_Impl.LogHex(tag, data, len);
+        return;
+    }
+
+    if (s_Impl.Log == NULL) return;
+
+    const uint8_t *p = (const uint8_t*)data;
+    char buf[64]; 
+    
+    _osal_log_wrapper("%s (Len=%d): ", tag, len);
+
+    #define CHUNK_SIZE 16
+    for (uint16_t i = 0; i < len; i += CHUNK_SIZE) {
+        uint16_t chunk = (len - i < CHUNK_SIZE) ? (len - i) : CHUNK_SIZE;
+        int pos = 0;
+        for (uint16_t j = 0; j < chunk; j++) {
+            pos += sprintf(buf + pos, "%02X ", p[i + j]);
+        }
+        _osal_log_wrapper("%s", buf);
+    }
+    _osal_log_wrapper("\r\n");
+}
+
+#endif
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\0_OSAL\lora_osal.h">
+```h
+#ifndef __LORA_OSAL_H
+#define __LORA_OSAL_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdarg.h>
+#include "LoRaPlatConfig.h" 
+
+// ============================================================
+//                    1. 接口定义
+// ============================================================
+
+typedef struct {
+    // --- 核心服务 (必须提供) ---
+    uint32_t (*GetTick)(void);          
+    void     (*DelayMs)(uint32_t ms);   
+    
+    /**
+     * @brief 进入临界区
+     * @return 中断状态上下文 (STM32需要保存PRIMASK，ESP32返回0即可)
+     */
+    uint32_t (*EnterCritical)(void);    
+    
+    /**
+     * @brief 退出临界区
+     * @param ctx 进入时保存的中断状态上下文
+     */
+    void     (*ExitCritical)(uint32_t ctx);     
+    
+    // --- 调试服务 (可选) ---
+    void     (*Log)(const char *fmt, va_list args);
+    void     (*LogHex)(const char *tag, const void *data, uint16_t len);
+    
+    // --- 内存服务 (可选) ---
+    void*    (*Malloc)(uint32_t size);
+    void     (*Free)(void* ptr);
+    
+} LoRa_OSAL_Interface_t;
+
+// ============================================================
+//                    2. 初始化 API
+// ============================================================
+
+bool LoRa_OSAL_Init(const LoRa_OSAL_Interface_t *impl);
+
+// ============================================================
+//                    3. 业务调用宏 (增强版)
+// ============================================================
+
+// --- 核心函数原型声明 (解决 implicit declaration 警告) ---
+uint32_t _osal_get_tick(void);
+void     _osal_delay_ms(uint32_t ms);
+void*    _osal_malloc(uint32_t size);
+void     _osal_free(void* ptr);
+
+// [关键修复] 显式声明临界区包装函数
+uint32_t _osal_enter_critical(void);
+void     _osal_exit_critical(uint32_t ctx);
+
+// 补偿函数
+void LoRa_OSAL_CompensateTick(uint32_t ms);
+
+// --- 宏定义映射 ---
+#define OSAL_GetTick()          _osal_get_tick()
+#define OSAL_DelayMs(ms)        _osal_delay_ms(ms)
+#define OSAL_Malloc(sz)         _osal_malloc(sz)
+#define OSAL_Free(ptr)          _osal_free(ptr)
+
+// [关键修复] 这里的宏现在调用的是有原型的函数
+#define OSAL_EnterCritical()    _osal_enter_critical()
+#define OSAL_ExitCritical(x)    _osal_exit_critical(x)
+        
+// --- 日志宏 ---
+#if (defined(LORA_DEBUG_PRINT) && LORA_DEBUG_PRINT == 1)
+    void _osal_log_wrapper(const char *fmt, ...);
+    void _osal_hexdump_wrapper(const char *tag, const void *data, uint16_t len);
+    
+    #define LORA_LOG(...)       _osal_log_wrapper(__VA_ARGS__)
+    #define LORA_HEXDUMP(t,d,l) _osal_hexdump_wrapper(t,d,l)
+#else
+    #define LORA_LOG(...)       do {} while (0)
+    #define LORA_HEXDUMP(t,d,l) do {} while (0)
+#endif
+
+// --- 参数检查宏 ---
+#if (defined(LORA_DEBUG_PRINT) && LORA_DEBUG_PRINT == 1)
+    #define LORA_CHECK(expr, ret_val) \
+        do { \
+            if (!(expr)) { \
+                LORA_LOG("[ERR] %s:%d Check Failed: "#expr"\r\n", __func__, __LINE__); \
+                return ret_val; \
+            } \
+        } while(0)
+        
+    #define LORA_CHECK_VOID(expr) \
+        do { \
+            if (!(expr)) { \
+                LORA_LOG("[ERR] %s:%d Check Failed: "#expr"\r\n", __func__, __LINE__); \
+                return; \
+            } \
+        } while(0)
+#else
+    #define LORA_CHECK(expr, ret_val) \
+        do { \
+            if (!(expr)) { \
+                return ret_val; \
+            } \
+        } while(0)
+
+    #define LORA_CHECK_VOID(expr) \
+        do { \
+            if (!(expr)) { \
+                return; \
+            } \
+        } while(0)
+#endif
+
+#endif // __LORA_OSAL_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\0_Utils\lora_crc16.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_crc16.c
+  * @author  LoRaPlat Team
+  * @brief   CRC16-CCITT (XMODEM) 实现
+  ******************************************************************************
+  */
+
+#include "lora_crc16.h"
+
+uint16_t LoRa_CRC16_Calculate(const uint8_t *data, uint16_t length) {
+    uint16_t crc = 0x0000;
+    
+    while (length--) {
+        crc ^= (uint16_t)(*data++) << 8;
+        for (int i = 0; i < 8; i++) {
+            if (crc & 0x8000) {
+                crc = (crc << 1) ^ 0x1021;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    return crc;
+}
+
+uint8_t LoRa_CRC16_Verify(const uint8_t *data, uint16_t length, uint16_t expected_crc) {
+    uint16_t calc = LoRa_CRC16_Calculate(data, length);
+    return (calc == expected_crc) ? 1 : 0;
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\0_Utils\lora_crc16.h">
+```h
+/**
+  ******************************************************************************
+  * @file    lora_crc16.h
+  * @author  LoRaPlat Team
+  * @brief   CRC16-CCITT (XMODEM) 计算工具
+  *          Poly: 0x1021, Init: 0x0000
+  ******************************************************************************
+  */
+
+#ifndef __LORA_CRC16_H
+#define __LORA_CRC16_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+/**
+ * @brief  计算 CRC16
+ * @param  data: 数据指针
+ * @param  length: 数据长度
+ * @return CRC16 校验码
+ */
+uint16_t LoRa_CRC16_Calculate(const uint8_t *data, uint16_t length);
+
+/**
+ * @brief  校验 CRC16
+ * @param  data: 数据指针
+ * @param  length: 数据长度
+ * @param  expected_crc: 期望的校验码
+ * @return 1=校验通过, 0=校验失败
+ */
+uint8_t LoRa_CRC16_Verify(const uint8_t *data, uint16_t length, uint16_t expected_crc);
+
+#endif // __LORA_CRC16_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\0_Utils\lora_ring_buffer.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_ring_buffer.c
+  * @author  LoRaPlat Team
+  * @brief   通用环形缓冲区实现
+  ******************************************************************************
+  */
+
+#include "lora_ring_buffer.h"
+
+#include "lora_osal.h"
+
+#include <string.h> // memcpy
+
+// ============================================================
+//                    1. 核心接口实现
+// ============================================================
+
+void LoRa_RingBuffer_Init(LoRa_RingBuffer_t *rb, uint8_t *buffer, uint16_t size) {
+    if (!rb || !buffer || size == 0) return;
+    
+    rb->pBuffer = buffer;
+    rb->Size    = size;
+    rb->Head    = 0;
+    rb->Tail    = 0;
+    rb->Count   = 0;
+}
+
+uint16_t LoRa_RingBuffer_Write(LoRa_RingBuffer_t *rb, const uint8_t *data, uint16_t length) {
+    LORA_CHECK(rb && rb->pBuffer && data && length > 0, 0);
+    
+    uint16_t free_space = rb->Size - rb->Count;
+    if (length > free_space) length = free_space; // 截断写入
+    
+    if (length == 0) return 0;
+
+    uint16_t chunk1 = rb->Size - rb->Head;
+    
+    if (length <= chunk1) {
+        // 情况1: 直接写入，不需要回绕
+        memcpy(&rb->pBuffer[rb->Head], data, length);
+        rb->Head += length;
+        if (rb->Head == rb->Size) rb->Head = 0;
+    } else {
+        // 情况2: 需要回绕
+        memcpy(&rb->pBuffer[rb->Head], data, chunk1);
+        memcpy(&rb->pBuffer[0], data + chunk1, length - chunk1);
+        rb->Head = length - chunk1;
+    }
+    
+    rb->Count += length;
+    return length;
+}
+
+uint16_t LoRa_RingBuffer_Read(LoRa_RingBuffer_t *rb, uint8_t *data, uint16_t max_length) {
+    LORA_CHECK(rb && rb->pBuffer && data && max_length > 0, 0);
+    
+    if (max_length > rb->Count) max_length = rb->Count;
+    
+    uint16_t chunk1 = rb->Size - rb->Tail;
+    
+    if (max_length <= chunk1) {
+        // 情况1: 直接读取，不需要回绕
+        memcpy(data, &rb->pBuffer[rb->Tail], max_length);
+        rb->Tail += max_length;
+        if (rb->Tail == rb->Size) rb->Tail = 0;
+    } else {
+        // 情况2: 需要回绕
+        memcpy(data, &rb->pBuffer[rb->Tail], chunk1);
+        memcpy(data + chunk1, &rb->pBuffer[0], max_length - chunk1);
+        rb->Tail = max_length - chunk1;
+    }
+    
+    rb->Count -= max_length;
+    return max_length;
+}
+
+void LoRa_RingBuffer_Clear(LoRa_RingBuffer_t *rb) {
+    if (!rb) return;
+    rb->Head = 0;
+    rb->Tail = 0;
+    rb->Count = 0;
+}
+
+// ============================================================
+//                    2. 状态查询实现
+// ============================================================
+
+uint16_t LoRa_RingBuffer_GetCount(const LoRa_RingBuffer_t *rb) {
+    return rb ? rb->Count : 0;
+}
+
+uint16_t LoRa_RingBuffer_GetFree(const LoRa_RingBuffer_t *rb) {
+    return rb ? (rb->Size - rb->Count) : 0;
+}
+
+bool LoRa_RingBuffer_IsEmpty(const LoRa_RingBuffer_t *rb) {
+    return (rb && rb->Count == 0);
+}
+
+bool LoRa_RingBuffer_IsFull(const LoRa_RingBuffer_t *rb) {
+    return (rb && rb->Count == rb->Size);
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\0_Utils\lora_ring_buffer.h">
+```h
+/**
+  ******************************************************************************
+  * @file    lora_ring_buffer.h
+  * @author  LoRaPlat Team
+  * @brief   通用环形缓冲区 (Ring Buffer) 接口定义
+  *          纯逻辑实现，无硬件依赖，内存由使用者提供。
+  ******************************************************************************
+  */
+
+#ifndef __LORA_RING_BUFFER_H
+#define __LORA_RING_BUFFER_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+// ============================================================
+//                    1. 数据结构定义
+// ============================================================
+
+typedef struct {
+    uint8_t  *pBuffer;   // 指向外部提供的缓冲区数组
+    uint16_t Size;       // 缓冲区总大小
+    uint16_t Head;       // 写指针 (Write Index)
+    uint16_t Tail;       // 读指针 (Read Index)
+    uint16_t Count;      // 当前数据量
+} LoRa_RingBuffer_t;
+
+// ============================================================
+//                    2. 核心接口
+// ============================================================
+
+/**
+ * @brief  初始化环形缓冲区
+ * @param  rb: 句柄
+ * @param  buffer: 外部数组指针
+ * @param  size: 数组大小
+ */
+void LoRa_RingBuffer_Init(LoRa_RingBuffer_t *rb, uint8_t *buffer, uint16_t size);
+
+/**
+ * @brief  写入数据 (Push)
+ * @param  rb: 句柄
+ * @param  data: 数据源
+ * @param  length: 写入长度
+ * @return 实际写入长度 (若空间不足可能小于 length)
+ */
+uint16_t LoRa_RingBuffer_Write(LoRa_RingBuffer_t *rb, const uint8_t *data, uint16_t length);
+
+/**
+ * @brief  读取数据 (Pop)
+ * @param  rb: 句柄
+ * @param  data: 目标缓冲区
+ * @param  max_length: 最大读取长度
+ * @return 实际读取长度
+ */
+uint16_t LoRa_RingBuffer_Read(LoRa_RingBuffer_t *rb, uint8_t *data, uint16_t max_length);
+
+/**
+ * @brief  清空缓冲区
+ */
+void LoRa_RingBuffer_Clear(LoRa_RingBuffer_t *rb);
+
+// ============================================================
+//                    3. 状态查询
+// ============================================================
+
+uint16_t LoRa_RingBuffer_GetCount(const LoRa_RingBuffer_t *rb);
+uint16_t LoRa_RingBuffer_GetFree(const LoRa_RingBuffer_t *rb);
+bool     LoRa_RingBuffer_IsEmpty(const LoRa_RingBuffer_t *rb);
+bool     LoRa_RingBuffer_IsFull(const LoRa_RingBuffer_t *rb);
+
+#endif // __LORA_RING_BUFFER_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\1_Port\lora_port.h">
+```h
+/**
+  ******************************************************************************
+  * @file    lora_port.h
+  * @author  LoRaPlat Team
+  * @brief   硬件接口层 (Port Layer) 定义 V3.3.0
+  *          负责屏蔽具体 MCU 的 GPIO/UART/DMA 差异。
+  ******************************************************************************
+  */
+
+#ifndef __LORA_PORT_H
+#define __LORA_PORT_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+// ============================================================
+//                    1. 初始化与配置
+// ============================================================
+
+/**
+ * @brief  端口初始化 (GPIO, UART, DMA, NVIC)
+ * @param  baudrate: 初始波特率
+ */
+void LoRa_Port_Init(uint32_t baudrate);
+
+/**
+ * @brief  重新配置 UART 波特率 (用于救砖或模式切换)
+ */
+void LoRa_Port_ReInitUart(uint32_t baudrate);
+
+// ============================================================
+//                    2. 引脚控制 (GPIO)
+// ============================================================
+
+/**
+ * @brief  设置 MD0 引脚 (模式控制)
+ * @param  level: true=High(配置模式), false=Low(通信模式)
+ */
+void LoRa_Port_SetMD0(bool level);
+
+/**
+ * @brief  设置 RST 引脚 (复位控制)
+ * @param  level: true=High, false=Low(复位)
+ */
+void LoRa_Port_SetRST(bool level);
+
+/**
+ * @brief  获取 AUX 引脚电平 (忙闲指示)
+ * @return true=High(Busy), false=Low(Idle)
+ */
+bool LoRa_Port_GetAUX(void);
+
+// ============================================================
+//                    3. 发送接口 (TX)
+// ============================================================
+
+/**
+ * @brief  查询发送硬件是否忙碌
+ * @return true=忙 (DMA正在搬运), false=闲
+ */
+bool LoRa_Port_IsTxBusy(void);
+
+/**
+ * @brief  发送数据 (启动 DMA)
+ * @param  data: 数据指针
+ * @param  len:  数据长度
+ * @return 实际发送长度 (0表示硬件忙，发送失败)
+ * @note   内部具有原子性保护，防止覆写缓冲区
+ */
+uint16_t LoRa_Port_TransmitData(const uint8_t *data, uint16_t len);
+
+// ============================================================
+//                    4. 接收接口 (RX)
+// ============================================================
+
+/**
+ * @brief  从 DMA 循环缓冲区读取数据
+ * @param  buf: 目标缓冲区
+ * @param  max_len: 最大读取长度
+ * @return 实际读取到的字节数
+ */
+uint16_t LoRa_Port_ReceiveData(uint8_t *buf, uint16_t max_len);
+
+/**
+ * @brief  清空接收缓冲区 (丢弃旧数据)
+ * @note   通常在发送 AT 指令前调用，确保收到的是最新的响应
+ */
+void LoRa_Port_ClearRxBuffer(void);
+
+// ============================================================
+//                    5. 其他能力
+// ============================================================
+
+/**
+ * @brief  获取物理熵源 (用于生成随机种子)
+ * @return 32位随机数
+ */
+uint32_t LoRa_Port_GetEntropy32(void);
+
+/**
+ * @brief  同步 AUX 状态 (消除中断抖动或初始化残留)
+ */
+void LoRa_Port_SyncAuxState(void);
+
+#endif // __LORA_PORT_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\1_Port\lora_port_stm32f10x.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_port_stm32f10x.c
+  * @author  LoRaPlat Team
+  * @brief   STM32F103 硬件接口实现 V3.3.0
+  ******************************************************************************
+  */
+
+#include "lora_port.h"
+#include "lora_osal.h"
+#include "stm32f10x.h"
+#include <string.h>
+
+// --- DMA 缓冲区配置 ---
+#define PORT_DMA_RX_BUF_SIZE 512
+#define PORT_DMA_TX_BUF_SIZE 512
+
+// 放在静态区，避免栈溢出
+static uint8_t  s_DmaRxBuf[PORT_DMA_RX_BUF_SIZE];
+static uint8_t  s_DmaTxBuf[PORT_DMA_TX_BUF_SIZE];
+static volatile uint16_t s_RxReadIndex = 0;
+
+// --- 状态标志 ---
+static volatile bool s_TxDmaBusy = false;
+
+// ============================================================
+//                    1. 初始化与配置
+// ============================================================
+
+void LoRa_Port_Init(uint32_t baudrate)
+{
+    // 1. 时钟使能
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB | RCC_APB2Periph_GPIOA | RCC_APB2Periph_AFIO, ENABLE);
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART3, ENABLE);
+    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
+
+    // 2. GPIO 配置
+    GPIO_InitTypeDef GPIO_InitStructure;
+    
+    // PB10 -> TX
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_10;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(GPIOB, &GPIO_InitStructure);
+    
+    // PB11 -> RX
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU; 
+    GPIO_Init(GPIOB, &GPIO_InitStructure);
+
+    // PA4 -> MD0
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_4;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    
+    // PA5 -> AUX (输入)
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_5;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+    // 3. USART3 配置
+    LoRa_Port_ReInitUart(baudrate); 
+
+    // 4. DMA RX (Circular) -> DMA1_Channel3
+    DMA_DeInit(DMA1_Channel3);
+    DMA_InitTypeDef DMA_InitStructure;
+    DMA_InitStructure.DMA_PeripheralBaseAddr = (uint32_t)&USART3->DR;
+    DMA_InitStructure.DMA_MemoryBaseAddr = (uint32_t)s_DmaRxBuf;
+    DMA_InitStructure.DMA_DIR = DMA_DIR_PeripheralSRC;
+    DMA_InitStructure.DMA_BufferSize = PORT_DMA_RX_BUF_SIZE;
+    DMA_InitStructure.DMA_PeripheralInc = DMA_PeripheralInc_Disable;
+    DMA_InitStructure.DMA_MemoryInc = DMA_MemoryInc_Enable;
+    DMA_InitStructure.DMA_PeripheralDataSize = DMA_PeripheralDataSize_Byte;
+    DMA_InitStructure.DMA_MemoryDataSize = DMA_MemoryDataSize_Byte;
+    DMA_InitStructure.DMA_Mode = DMA_Mode_Circular;
+    DMA_InitStructure.DMA_Priority = DMA_Priority_High;
+    DMA_InitStructure.DMA_M2M = DMA_M2M_Disable;
+    DMA_Init(DMA1_Channel3, &DMA_InitStructure);
+
+    // 5. DMA TX (Normal) -> DMA1_Channel2
+    DMA_DeInit(DMA1_Channel2);
+    DMA_InitStructure.DMA_PeripheralBaseAddr = (uint32_t)&USART3->DR;
+    DMA_InitStructure.DMA_MemoryBaseAddr = (uint32_t)s_DmaTxBuf;
+    DMA_InitStructure.DMA_DIR = DMA_DIR_PeripheralDST;
+    DMA_InitStructure.DMA_BufferSize = 0;
+    DMA_InitStructure.DMA_Mode = DMA_Mode_Normal;
+    DMA_Init(DMA1_Channel2, &DMA_InitStructure);
+    DMA_ITConfig(DMA1_Channel2, DMA_IT_TC, ENABLE);
+
+    // 6. NVIC 配置
+    NVIC_InitTypeDef NVIC_InitStructure;
+    
+    // DMA TX 中断
+    NVIC_InitStructure.NVIC_IRQChannel = DMA1_Channel2_IRQn;
+    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;
+    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 1;
+    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_Init(&NVIC_InitStructure);
+
+    // 7. 启动
+    DMA_Cmd(DMA1_Channel3, ENABLE);
+    USART_DMACmd(USART3, USART_DMAReq_Rx | USART_DMAReq_Tx, ENABLE);
+    USART_Cmd(USART3, ENABLE);
+    
+    // 初始状态同步
+    LoRa_Port_SetMD0(false);
+    LoRa_Port_SyncAuxState(); 
+}
+
+void LoRa_Port_ReInitUart(uint32_t baudrate) {
+    USART_InitTypeDef USART_InitStructure;
+    USART_InitStructure.USART_BaudRate = baudrate;
+    USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+    USART_InitStructure.USART_StopBits = USART_StopBits_1;
+    USART_InitStructure.USART_Parity = USART_Parity_No;
+    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+    USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+    USART_Init(USART3, &USART_InitStructure);
+    
+    USART_DMACmd(USART3, USART_DMAReq_Rx | USART_DMAReq_Tx, ENABLE);
+    USART_Cmd(USART3, ENABLE);
+}
+
+// ============================================================
+//                    2. 引脚控制
+// ============================================================
+
+void LoRa_Port_SetMD0(bool level) {
+    GPIO_WriteBit(GPIOA, GPIO_Pin_4, level ? Bit_SET : Bit_RESET);
+}
+
+void LoRa_Port_SetRST(bool level) {
+    // 如有 RST 引脚，在此实现
+    // GPIO_WriteBit(GPIOA, GPIO_Pin_X, level ? Bit_SET : Bit_RESET);
+    (void)level;
+}
+
+bool LoRa_Port_GetAUX(void) {
+    return (GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5) == 1);
+}
+
+void LoRa_Port_SyncAuxState(void) {
+    uint32_t primask = OSAL_EnterCritical();
+    // 强制复位 DMA 硬件状态
+    DMA_Cmd(DMA1_Channel2, DISABLE);
+    DMA1_Channel2->CNDTR = 0;
+    s_TxDmaBusy = false;
+    OSAL_ExitCritical(primask);
+}
+
+// ============================================================
+//                    3. 发送接口 (TX)
+// ============================================================
+
+bool LoRa_Port_IsTxBusy(void) {
+    return s_TxDmaBusy;
+}
+
+uint16_t LoRa_Port_TransmitData(const uint8_t *data, uint16_t len) {
+    LORA_CHECK(data && len > 0 && len <= PORT_DMA_TX_BUF_SIZE, 0);
+    // 【关键修改】声明变量 primask 并接收返回值
+    uint32_t primask = OSAL_EnterCritical();
+
+    // [关键修复] 双重检查：软件标志 + 硬件计数器
+    // 防止上层在 IsTxBusy 返回 false 后，硬件尚未完全就绪的微小间隙
+    if (s_TxDmaBusy || DMA_GetCurrDataCounter(DMA1_Channel2) != 0) {
+        OSAL_ExitCritical(primask);
+        return 0; // 忙，拒绝发送
+    }
+
+    // 1. 标记忙碌
+    s_TxDmaBusy = true;
+    
+    // 2. 填充数据 (安全，因为已确认 DMA 不忙)
+    memcpy(s_DmaTxBuf, data, len);
+    
+    // 3. 启动 DMA
+    DMA_Cmd(DMA1_Channel2, DISABLE);
+    DMA1_Channel2->CNDTR = len;
+    DMA_Cmd(DMA1_Channel2, ENABLE);
+    
+    OSAL_ExitCritical(primask);
+    
+    return len;
+}
+
+// ============================================================
+//                    4. 接收接口 (RX)
+// ============================================================
+
+uint16_t LoRa_Port_ReceiveData(uint8_t *buf, uint16_t max_len) {
+	
+    LORA_CHECK(buf && max_len > 0, 0);		
+    uint16_t cnt = 0;
+    // 获取 DMA 当前写入位置 (硬件指针)
+    uint16_t dma_write_idx = PORT_DMA_RX_BUF_SIZE - DMA_GetCurrDataCounter(DMA1_Channel3);
+    
+    // 循环读取直到追上硬件指针
+    while (s_RxReadIndex != dma_write_idx && cnt < max_len) {
+        buf[cnt++] = s_DmaRxBuf[s_RxReadIndex++];
+        if (s_RxReadIndex >= PORT_DMA_RX_BUF_SIZE) s_RxReadIndex = 0;
+    }
+    return cnt;
+}
+
+void LoRa_Port_ClearRxBuffer(void) {
+    s_RxReadIndex = PORT_DMA_RX_BUF_SIZE - DMA_GetCurrDataCounter(DMA1_Channel3);
+}
+
+// ============================================================
+//                    5. 其他能力
+// ============================================================
+
+uint32_t LoRa_Port_GetEntropy32(void) {
+    // 简单的 ADC 悬空采样 (保持原逻辑)
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1 | RCC_APB2Periph_GPIOA, ENABLE);
+    RCC_ADCCLKConfig(RCC_PCLK2_Div6); 
+    
+    GPIO_InitTypeDef GPIO_InitStructure;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    
+    ADC_InitTypeDef ADC_InitStructure;
+    ADC_InitStructure.ADC_Mode = ADC_Mode_Independent;
+    ADC_InitStructure.ADC_ScanConvMode = DISABLE;
+    ADC_InitStructure.ADC_ContinuousConvMode = DISABLE;
+    ADC_InitStructure.ADC_ExternalTrigConv = ADC_ExternalTrigConv_None;
+    ADC_InitStructure.ADC_DataAlign = ADC_DataAlign_Right;
+    ADC_InitStructure.ADC_NbrOfChannel = 1;
+    ADC_Init(ADC1, &ADC_InitStructure);
+    
+    ADC_Cmd(ADC1, ENABLE);
+    ADC_ResetCalibration(ADC1);
+    while(ADC_GetResetCalibrationStatus(ADC1));
+    ADC_StartCalibration(ADC1);
+    while(ADC_GetCalibrationStatus(ADC1));
+    
+    uint32_t seed = 0;
+    for(int i=0; i<32; i++) {
+        ADC_RegularChannelConfig(ADC1, ADC_Channel_0, 1, ADC_SampleTime_1Cycles5);
+        ADC_SoftwareStartConvCmd(ADC1, ENABLE);
+        while(!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC));
+        if (ADC_GetConversionValue(ADC1) & 0x01) seed |= (1 << i);
+    }
+    ADC_Cmd(ADC1, DISABLE);
+    
+    if (seed == 0) seed = OSAL_GetTick() ^ 0x5A5A5A5A;
+    return seed;
+}
+
+// ============================================================
+//                    6. 中断服务函数
+// ============================================================
+
+// DMA TX 完成
+void DMA1_Channel2_IRQHandler(void) {
+    if (DMA_GetITStatus(DMA1_IT_TC2)) {
+        DMA_ClearITPendingBit(DMA1_IT_TC2);
+        s_TxDmaBusy = false;
+    }
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\2_Driver\lora_at_command_engine.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_at_command_engine.c
+  * @author  LoRaPlat Team
+  * @brief   AT 指令执行引擎实现 (阻塞版)
+  ******************************************************************************
+  */
+
+#include "lora_at_command_engine.h"
+#include "lora_port.h"
+#include "lora_osal.h"
+#include <string.h>
+#include <stdio.h>
+
+// 内部接收缓冲区
+static char s_AtRxBuf[128];
+static uint16_t s_AtRxIdx = 0;
+
+void LoRa_AT_Init(void) {
+    s_AtRxIdx = 0;
+    LoRa_Port_ClearRxBuffer();
+}
+
+AT_Status_t LoRa_AT_Execute(const char *cmd, const char *expect, uint32_t timeout) {
+    // 1. 清空接收缓存
+    LoRa_Port_ClearRxBuffer();
+    s_AtRxIdx = 0;
+    memset(s_AtRxBuf, 0, sizeof(s_AtRxBuf));
+    
+    // 2. 发送指令
+    // 注意：这里调用 Port 层的发送接口
+    // 如果 Port 忙，我们需要等待吗？是的，因为这是阻塞接口。
+    uint32_t start = OSAL_GetTick();
+    while (LoRa_Port_IsTxBusy()) {
+        if (OSAL_GetTick() - start > 100) return AT_STATUS_ERROR; // 发送超时
+    }
+    
+    LoRa_Port_TransmitData((const uint8_t*)cmd, strlen(cmd));
+    
+    // 3. 等待响应
+    start = OSAL_GetTick();
+    
+    while (OSAL_GetTick() - start < timeout) {
+        uint8_t byte;
+        // 逐字节读取
+        if (LoRa_Port_ReceiveData(&byte, 1) > 0) {
+            s_AtRxBuf[s_AtRxIdx++] = byte;
+            if (s_AtRxIdx >= sizeof(s_AtRxBuf) - 1) s_AtRxIdx = sizeof(s_AtRxBuf) - 2; // 防止溢出
+            s_AtRxBuf[s_AtRxIdx] = '\0'; // 保持字符串结尾
+            
+            // 检查是否包含期望的字符串
+            if (strstr(s_AtRxBuf, expect)) {
+                OSAL_DelayMs(20); // 稍作延时确保后续字符发完
+                return AT_STATUS_OK;
+            }
+        }
+    }
+    
+    return AT_STATUS_TIMEOUT;
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\2_Driver\lora_at_command_engine.h">
+```h
+/**
+  ******************************************************************************
+  * @file    lora_at_command_engine.h
+  * @author  LoRaPlat Team
+  * @brief   AT 指令执行引擎接口
+  ******************************************************************************
+  */
+
+#ifndef __LORA_AT_COMMAND_ENGINE_H
+#define __LORA_AT_COMMAND_ENGINE_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+// ============================================================
+//                    1. 状态定义
+// ============================================================
+
+typedef enum {
+    AT_STATUS_OK = 0,       // 执行成功 (收到预期响应)
+    AT_STATUS_TIMEOUT,      // 超时 (未收到预期响应)
+    AT_STATUS_ERROR,        // 错误 (硬件错误或收到 ERROR)
+    AT_STATUS_BUSY          // 忙 (仅异步模式使用)
+} AT_Status_t;
+
+// ============================================================
+//                    2. 核心接口
+// ============================================================
+
+/**
+ * @brief  初始化 AT 引擎
+ */
+void LoRa_AT_Init(void);
+
+/**
+ * @brief  执行 AT 指令 (阻塞式)
+ * @param  cmd: 指令字符串 (必须以 \r\n 结尾)
+ * @param  expect: 期望收到的响应子串 (e.g. "OK")
+ * @param  timeout: 超时时间 (ms)
+ * @return 执行结果
+ */
+AT_Status_t LoRa_AT_Execute(const char *cmd, const char *expect, uint32_t timeout);
+
+#endif // __LORA_AT_COMMAND_ENGINE_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\2_Driver\lora_driver.c">
+```c
+#include "lora_driver.h"
+#include "lora_port.h"
+
+// Init 在 core 中实现，这里只实现透传接口
+
+bool LoRa_Driver_AsyncSend(const uint8_t *data, uint16_t len) {
+    // 1. 检查 AUX
+    if (LoRa_Port_GetAUX()) return false;
+    
+    // 2. 启动 DMA
+    return (LoRa_Port_TransmitData(data, len) > 0);
+}
+
+uint16_t LoRa_Driver_Read(uint8_t *buf, uint16_t max_len) {
+    return LoRa_Port_ReceiveData(buf, max_len);
+}
+
+bool LoRa_Driver_IsBusy(void) {
+    return LoRa_Port_GetAUX() || LoRa_Port_IsTxBusy();
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\2_Driver\lora_driver.h">
+```h
+#ifndef __LORA_DRIVER_H
+#define __LORA_DRIVER_H
+
+#include "LoRaPlatConfig.h"
+#include <stdbool.h>
+#include <stdint.h>
+
+/**
+ * @brief  驱动初始化 (阻塞式)
+ */
+bool LoRa_Driver_Init(const LoRa_Config_t *cfg);
+
+/**
+ * @brief  异步发送数据 (非阻塞)
+ * @return true=已启动DMA, false=忙或错误
+ */
+bool LoRa_Driver_AsyncSend(const uint8_t *data, uint16_t len);
+
+/**
+ * @brief  读取接收数据
+ */
+uint16_t LoRa_Driver_Read(uint8_t *buf, uint16_t max_len);
+
+/**
+ * @brief  查询驱动是否忙碌
+ */
+bool LoRa_Driver_IsBusy(void);
+
+#endif // __LORA_DRIVER_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\2_Driver\lora_driver_config.c">
+```c
+#include "lora_driver.h"
+#include <stdio.h>
+
+// --- ATK-LORA-01 指令集 ---
+
+const char* Drv_GetAtCmd_Reset(void) {
+    return "AT+RESET\r\n";
+}
+
+const char* Drv_GetAtCmd_Mode(uint8_t mode) {
+    // 0=透传, 1=定向
+    return (mode == 0) ? "AT+TMODE=0\r\n" : "AT+TMODE=1\r\n";
+}
+
+void Drv_GetAtCmd_Rate(uint8_t channel, uint8_t rate, char *buf) {
+    // 映射速率: 0->0.3k ... 5->19.2k
+    // ATK 默认 5 (19.2k)
+    if (rate > 5) rate = 5;
+    sprintf(buf, "AT+WLRATE=%d,%d\r\n", channel, rate);
+}
+
+void Drv_GetAtCmd_Addr(uint16_t addr, char *buf) {
+    sprintf(buf, "AT+ADDR=%02X,%02X\r\n", (addr >> 8) & 0xFF, addr & 0xFF);
+}
+
+void Drv_GetAtCmd_Power(uint8_t power, char *buf) {
+    // 0=11dBm, 1=14dBm, 2=17dBm, 3=20dBm
+    if (power > 3) power = 3;
+    sprintf(buf, "AT+TPOWER=%d\r\n", power);
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\2_Driver\lora_driver_core.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_driver_core.c
+  * @author  LoRaPlat Team
+  * @brief   LoRa 驱动核心逻辑 (策略层)
+  ******************************************************************************
+  */
+
+#include "lora_driver.h"
+#include "lora_at_command_engine.h"
+#include "lora_port.h"
+#include "lora_osal.h"
+#include <stdio.h>
+
+// ATK-LORA-01 硬件规定：配置模式(MD0=1)下固定使用 115200
+#define ATK_LORA_CONFIG_BAUDRATE    115200
+
+// 辅助：波特率转参数
+static int _GetBaudParam(uint32_t baudrate) {
+    switch(baudrate) {
+        case 1200:   return 0;
+        case 2400:   return 1;
+        case 4800:   return 2;
+        case 9600:   return 3;
+        case 19200:  return 4;
+        case 38400:  return 5;
+        case 57600:  return 6;
+        case 115200: return 7;
+        default:     return 3; 
+    }
+}
+
+bool LoRa_Driver_Init(const LoRa_Config_t *cfg) {
+    // 1. 端口底层初始化
+    LoRa_Port_Init(ATK_LORA_CONFIG_BAUDRATE); 
+    LoRa_AT_Init();
+    
+    LORA_LOG("[DRV] Init Start. Target Baud: %d\r\n", LORA_TARGET_BAUDRATE);
+
+    // 2. 进入配置模式
+    LoRa_Port_SetMD0(true);
+    OSAL_DelayMs(600); 
+    
+    // 3. 强制 MCU 串口切换到 115200
+    LoRa_Port_ReInitUart(ATK_LORA_CONFIG_BAUDRATE);
+    OSAL_DelayMs(100); 
+    
+    // 4. 握手检查
+    bool link_ok = false;
+    for (int i = 0; i < 3; i++) {
+        if (LoRa_AT_Execute("AT\r\n", "OK", 200) == AT_STATUS_OK) {
+            link_ok = true;
+            LORA_LOG("[DRV] Handshake OK\r\n");
+            break;
+        }
+        OSAL_DelayMs(100);
+    }
+    
+    if (!link_ok) {
+        LORA_LOG("[DRV] Handshake Fail!\r\n");
+        LoRa_Port_ReInitUart(LORA_TARGET_BAUDRATE);
+        return false;
+    }
+    
+    // 5. 应用配置参数
+    char cmd[64];
+    bool cfg_ok = true;
+    
+    // 5.1 设置地址
+    sprintf(cmd, "AT+ADDR=%02X,%02X\r\n", (cfg->hw_addr >> 8) & 0xFF, cfg->hw_addr & 0xFF);
+    if (LoRa_AT_Execute(cmd, "OK", 500) != AT_STATUS_OK) cfg_ok = false;
+    
+    // 5.2 设置空速和信道
+    sprintf(cmd, "AT+WLRATE=%d,%d\r\n", cfg->channel, cfg->air_rate);
+    if (LoRa_AT_Execute(cmd, "OK", 500) != AT_STATUS_OK) cfg_ok = false;
+    
+    // 5.3 设置功率
+    sprintf(cmd, "AT+TPOWER=%d\r\n", cfg->power);
+    if (LoRa_AT_Execute(cmd, "OK", 500) != AT_STATUS_OK) cfg_ok = false;
+    
+    // 5.4 设置传输模式
+    const char *mode_cmd = (cfg->tmode == 0) ? "AT+TMODE=0\r\n" : "AT+TMODE=1\r\n";
+    if (LoRa_AT_Execute(mode_cmd, "OK", 500) != AT_STATUS_OK) cfg_ok = false;
+
+    // 5.5 设置波特率
+    int baud_param = _GetBaudParam(LORA_TARGET_BAUDRATE);
+    sprintf(cmd, "AT+UART=%d,0\r\n", baud_param);
+    if (LoRa_AT_Execute(cmd, "OK", 500) != AT_STATUS_OK) cfg_ok = false;
+    
+    // 6. 退出配置模式
+    LoRa_Port_SetMD0(false);
+    LORA_LOG("[DRV] Exiting Config Mode...\r\n");
+    
+    // 7. 等待重启
+    OSAL_DelayMs(100); 
+    uint32_t wait_start = OSAL_GetTick();
+    while(!LoRa_Port_GetAUX()) {
+         if (OSAL_GetTick() - wait_start > 500) break; 
+    }
+    wait_start = OSAL_GetTick();
+    while(LoRa_Port_GetAUX()) {
+        if (OSAL_GetTick() - wait_start > 2000) break;
+    }
+    
+    // 8. 切回目标波特率
+    LoRa_Port_ReInitUart(LORA_TARGET_BAUDRATE);
+    OSAL_DelayMs(100); 
+    
+    LoRa_Port_SyncAuxState();
+    LoRa_Port_ClearRxBuffer();
+    
+    return cfg_ok;
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\3_Manager\lora_manager.c">
+```c
+#include "lora_manager.h"
+#include "lora_manager_fsm.h"
+#include "lora_manager_buffer.h"
+#include "lora_osal.h"
+#include <string.h>
+
+// ============================================================
+//                    内部变量
+// ============================================================
+
+#define RX_WORKSPACE_SIZE  MGR_RX_BUF_SIZE 
+static uint8_t s_RxWorkspace[RX_WORKSPACE_SIZE];
+
+static LoRa_OnRxData_t s_OnRx = NULL;
+static const LoRa_Config_t *s_Mgr_Config = NULL;
+static const LoRa_Cipher_t *s_Cipher = NULL;
+
+// [新增] 发送缓存队列 (简单的结构体数组环形队列)
+#define TX_PACKET_QUEUE_SIZE 4 
+typedef struct {
+    uint8_t  payload[LORA_MAX_PAYLOAD_LEN];
+    uint16_t len;
+    uint16_t target_id;
+} TxRequest_t;
+
+static TxRequest_t s_TxQueue[TX_PACKET_QUEUE_SIZE];
+static uint8_t s_TxQ_Head = 0;
+static uint8_t s_TxQ_Tail = 0;
+static uint8_t s_TxQ_Count = 0;
+
+// ============================================================
+//                    核心实现
+// ============================================================
+
+void LoRa_Manager_Init(const LoRa_Config_t *cfg, LoRa_OnRxData_t on_rx) {
+    LORA_CHECK_VOID(cfg); 
+    s_Mgr_Config = cfg;
+    s_OnRx = on_rx;
+    s_Cipher = NULL;
+    
+    // 初始化队列
+    s_TxQ_Head = 0;
+    s_TxQ_Tail = 0;
+    s_TxQ_Count = 0;
+    
+    LoRa_Manager_Buffer_Init();
+    LoRa_Manager_FSM_Init(cfg); 
+}
+
+void LoRa_Manager_RegisterCipher(const LoRa_Cipher_t *cipher) {
+    s_Cipher = cipher;
+}
+
+// [新增] 尝试从队列中取出并发送
+static void _ProcessTxQueue(void) {
+    // 1. 如果 FSM 忙，不能发送，直接退出
+    if (LoRa_Manager_FSM_IsBusy()) return;
+    
+    // 2. 如果队列空，退出
+    if (s_TxQ_Count == 0) return;
+    
+    // 3. 取出队首
+    TxRequest_t *req = &s_TxQueue[s_TxQ_Tail];
+    
+    // 4. 尝试发送给 FSM
+    uint8_t tx_stack_buf[LORA_MAX_PAYLOAD_LEN + 32];
+    if (LoRa_Manager_FSM_Send(req->payload, req->len, req->target_id, tx_stack_buf, sizeof(tx_stack_buf))) {
+        // 发送成功，移动 Tail
+        s_TxQ_Tail = (s_TxQ_Tail + 1) % TX_PACKET_QUEUE_SIZE;
+        s_TxQ_Count--;
+        LORA_LOG("[MGR] Dequeue TX (Left: %d)\r\n", s_TxQ_Count);
+    }
+}
+
+void LoRa_Manager_Run(void) {
+    // 1. 从 Port 拉取数据
+    LoRa_Manager_Buffer_PullFromPort();
+    
+    // 2. 解析数据包
+    LoRa_Packet_t pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    
+    if (s_Mgr_Config && LoRa_Manager_Buffer_GetRxPacket(&pkt, s_Mgr_Config->net_id, s_Mgr_Config->group_id, 
+                                        s_RxWorkspace, RX_WORKSPACE_SIZE)) {
+        
+        bool valid_new_packet = LoRa_Manager_FSM_ProcessRxPacket(&pkt);
+        
+        if (valid_new_packet && s_OnRx) {
+            if (s_Cipher && s_Cipher->Decrypt && pkt.PayloadLen > 0) {
+                uint16_t new_len = s_Cipher->Decrypt(pkt.Payload, pkt.PayloadLen, pkt.Payload);
+                pkt.PayloadLen = new_len;
+            }
+            s_OnRx(pkt.Payload, pkt.PayloadLen, pkt.SourceID);
+        }
+    }
+    
+    // 3. 运行状态机
+    LoRa_Manager_FSM_Run(s_RxWorkspace, RX_WORKSPACE_SIZE);
+    
+    // 4. [新增] 处理发送队列
+    _ProcessTxQueue();
+}
+
+bool LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id) {
+    // 1. 加密处理
+    uint8_t final_payload[LORA_MAX_PAYLOAD_LEN];
+    uint16_t final_len = len;
+    
+    if (len > LORA_MAX_PAYLOAD_LEN) return false;
+
+    if (s_Cipher && s_Cipher->Encrypt) {
+        final_len = s_Cipher->Encrypt(payload, len, final_payload);
+        if (final_len > LORA_MAX_PAYLOAD_LEN) return false; 
+    } else {
+        memcpy(final_payload, payload, len);
+    }
+
+    // 2. [修改] 尝试入队
+    // 临界区保护
+    uint32_t ctx = OSAL_EnterCritical();
+    
+    if (s_TxQ_Count >= TX_PACKET_QUEUE_SIZE) {
+        OSAL_ExitCritical(ctx);
+        LORA_LOG("[MGR] TX Queue Full!\r\n");
+        return false;
+    }
+    
+    TxRequest_t *req = &s_TxQueue[s_TxQ_Head];
+    memcpy(req->payload, final_payload, final_len);
+    req->len = final_len;
+    req->target_id = target_id;
+    
+    s_TxQ_Head = (s_TxQ_Head + 1) % TX_PACKET_QUEUE_SIZE;
+    s_TxQ_Count++;
+    
+    OSAL_ExitCritical(ctx);
+    
+    // 3. 尝试立即触发一次 (如果 FSM 刚好空闲)
+    _ProcessTxQueue();
+    
+    return true;
+}
+
+bool LoRa_Manager_IsBusy(void) {
+    // 如果队列里有数据，也算忙
+    return LoRa_Manager_FSM_IsBusy() || (s_TxQ_Count > 0);
+}
+
+uint32_t LoRa_Manager_GetSleepDuration(void) {
+    // 如果队列有数据，不能休眠
+    if (s_TxQ_Count > 0) return 0;
+    return LoRa_Manager_FSM_GetNextTimeout();
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\3_Manager\lora_manager.h">
+```h
+/**
+  ******************************************************************************
+  * @file    lora_manager.h
+  * @author  LoRaPlat Team
+  * @brief   LoRa 逻辑链路层管理器 (V3.3.4 Security Enhanced)
+  *          负责数据包的调度、FSM 驱动以及安全加密钩子。
+  ******************************************************************************
+  */
+
+#ifndef __LORA_MANAGER_H
+#define __LORA_MANAGER_H
+
+#include "LoRaPlatConfig.h"
+#include <stdint.h>
+#include <stdbool.h>
+
+// ============================================================
+//                    1. 宏定义与类型
+// ============================================================
+
+/** @brief 定义无穷大时间 (表示无定时任务) */
+#define LORA_TIMEOUT_INFINITE   0xFFFFFFFF
+
+/** @brief 接收数据回调函数原型 */
+typedef void (*LoRa_OnRxData_t)(uint8_t *data, uint16_t len, uint16_t src_id);
+
+/** 
+ * @brief 加密/解密算法接口结构体 
+ * @note  用户可注册自定义算法 (如 XOR, AES, ChaCha20)。
+ *        注意：仅对 Payload 进行加密，协议头保持明文以支持路由和去重。
+ */
+typedef struct {
+    /**
+     * @brief  加密函数
+     * @param  plain: 明文数据输入
+     * @param  len:   数据长度
+     * @param  cipher: 密文数据输出 (缓冲区大小保证至少为 LORA_MAX_PAYLOAD_LEN)
+     * @return 加密后的长度 (若算法导致长度增加，需确保不超过 MAX_PAYLOAD)
+     */
+    uint16_t (*Encrypt)(const uint8_t *plain, uint16_t len, uint8_t *cipher);
+
+    /**
+     * @brief  解密函数
+     * @param  cipher: 密文数据输入
+     * @param  len:    数据长度
+     * @param  plain:  明文数据输出
+     * @return 解密后的长度
+     */
+    uint16_t (*Decrypt)(const uint8_t *cipher, uint16_t len, uint8_t *plain);
+} LoRa_Cipher_t;
+
+// ============================================================
+//                    2. 核心接口
+// ============================================================
+
+/**
+ * @brief  初始化管理器
+ * @param  cfg: 配置结构体指针
+ * @param  on_rx: 接收回调
+ */
+void LoRa_Manager_Init(const LoRa_Config_t *cfg, LoRa_OnRxData_t on_rx);
+
+/**
+ * @brief  注册安全算法 (可选)
+ * @param  cipher: 算法接口指针 (NULL 表示注销)
+ */
+void LoRa_Manager_RegisterCipher(const LoRa_Cipher_t *cipher);
+
+/**
+ * @brief  主循环 (需周期性调用)
+ */
+void LoRa_Manager_Run(void);
+
+/**
+ * @brief  发送数据 (非阻塞)
+ * @param  payload: 数据内容
+ * @param  len: 数据长度
+ * @param  target_id: 目标逻辑 ID
+ * @return true=成功入队/发送, false=忙或错误
+ */
+bool LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id);
+
+/**
+ * @brief  查询是否忙碌
+ */
+bool LoRa_Manager_IsBusy(void);
+
+/**
+ * @brief  获取建议休眠时长 (Tickless)
+ */
+uint32_t LoRa_Manager_GetSleepDuration(void);
+
+#endif // __LORA_MANAGER_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\3_Manager\lora_manager_buffer.c">
+```c
+#include "lora_manager_buffer.h"
+#include "lora_ring_buffer.h"
+#include "lora_port.h"
+#include "LoRaPlatConfig.h"
+#include "lora_osal.h" // 引入临界区支持
+#include <string.h>
+
+// 缓冲区大小定义
+#define TX_QUEUE_SIZE   MGR_TX_BUF_SIZE
+#define RX_QUEUE_SIZE   MGR_RX_BUF_SIZE
+#define ACK_QUEUE_SIZE  64 // ACK 队列较小，足够存 2-3 个 ACK 包
+
+// 静态缓冲区
+static uint8_t s_TxBufArr[TX_QUEUE_SIZE];
+static uint8_t s_RxBufArr[RX_QUEUE_SIZE];
+static uint8_t s_AckBufArr[ACK_QUEUE_SIZE]; // [新增] ACK 专用缓冲区
+
+// 环形队列句柄
+static LoRa_RingBuffer_t s_TxRing;
+static LoRa_RingBuffer_t s_RxRing;
+static LoRa_RingBuffer_t s_AckRing; // [新增] ACK 专用队列
+
+void LoRa_Manager_Buffer_Init(void) {
+    LoRa_RingBuffer_Init(&s_TxRing, s_TxBufArr, TX_QUEUE_SIZE);
+    LoRa_RingBuffer_Init(&s_RxRing, s_RxBufArr, RX_QUEUE_SIZE);
+    LoRa_RingBuffer_Init(&s_AckRing, s_AckBufArr, ACK_QUEUE_SIZE);
+}
+
+// ============================================================
+//                    普通发送队列 (Tx Queue)
+// ============================================================
+
+bool LoRa_Manager_Buffer_PushTx(const LoRa_Packet_t *packet, uint8_t tmode, uint8_t channel, 
+                                uint8_t *scratch_buf, uint16_t scratch_len) {
+    LORA_CHECK(packet && scratch_buf && scratch_len > 0, false);
+
+    // 1. 序列化 (耗时操作，在临界区外进行，使用传入的栈内存)
+    uint16_t len = LoRa_Manager_Protocol_Pack(packet, scratch_buf, scratch_len, tmode, channel);
+    if (len == 0) return false;
+    
+    // 2. 入队 (快速操作，必须原子化)
+    bool ret = false;
+    
+    uint32_t primask = OSAL_EnterCritical(); // 【关中断/加锁】
+    
+    if (LoRa_RingBuffer_GetFree(&s_TxRing) >= len) {
+        LoRa_RingBuffer_Write(&s_TxRing, scratch_buf, len);
+        ret = true;
+    }
+    
+    OSAL_ExitCritical(primask);  // 【开中断/解锁】
+    
+    return ret;
+}
+
+bool LoRa_Manager_Buffer_HasTxData(void) {
+    return !LoRa_RingBuffer_IsEmpty(&s_TxRing);
+}
+
+uint16_t LoRa_Manager_Buffer_PeekTx(uint8_t *scratch_buf, uint16_t scratch_len) {
+    // Peek 操作只读不写，且是在单线程 Run 中调用，通常不需要加锁
+    // 但为了绝对安全（防止 Push 修改 Head 导致 Count 变化），建议加锁读取 Count
+    // 这里简化处理：假设 Run 是单线程的，且 Push 只修改 Head，Peek 只读 Tail 和 Count
+    // 只要 Count 读取是原子的，Peek 就是安全的。
+    
+    if (s_TxRing.Count == 0) return 0;
+    
+    uint16_t len = s_TxRing.Count;
+    if (len > scratch_len) len = scratch_len;
+    
+    uint16_t chunk1 = s_TxRing.Size - s_TxRing.Tail;
+    if (len <= chunk1) {
+        memcpy(scratch_buf, &s_TxRing.pBuffer[s_TxRing.Tail], len);
+    } else {
+        memcpy(scratch_buf, &s_TxRing.pBuffer[s_TxRing.Tail], chunk1);
+        memcpy(scratch_buf + chunk1, &s_TxRing.pBuffer[0], len - chunk1);
+    }
+    return len;
+}
+
+void LoRa_Manager_Buffer_PopTx(uint16_t len) {
+    uint8_t dummy;
+    
+    uint32_t primask = OSAL_EnterCritical(); // 【关中断/加锁】
+    
+    // 简单粗暴的移动指针方式
+    for(uint16_t i=0; i<len; i++) {
+        LoRa_RingBuffer_Read(&s_TxRing, &dummy, 1);
+    }
+    
+    OSAL_ExitCritical(primask);  // 【开中断/解锁】
+}
+
+// ============================================================
+//                    ACK 高优先级队列 (Ack Queue)
+// ============================================================
+
+bool LoRa_Manager_Buffer_PushAck(const LoRa_Packet_t *packet, uint8_t tmode, uint8_t channel, 
+                                 uint8_t *scratch_buf, uint16_t scratch_len) {
+    LORA_CHECK(packet && scratch_buf && scratch_len > 0, false);
+
+    // 1. 序列化
+    uint16_t len = LoRa_Manager_Protocol_Pack(packet, scratch_buf, scratch_len, tmode, channel);
+    if (len == 0) return false;
+    
+    // 2. 入队 (原子操作)
+    bool ret = false;
+    
+    uint32_t primask = OSAL_EnterCritical();
+    
+    if (LoRa_RingBuffer_GetFree(&s_AckRing) >= len) {
+        LoRa_RingBuffer_Write(&s_AckRing, scratch_buf, len);
+        ret = true;
+    }
+    
+    OSAL_ExitCritical(primask);
+    
+    return ret;
+}
+
+bool LoRa_Manager_Buffer_HasAckData(void) {
+    return !LoRa_RingBuffer_IsEmpty(&s_AckRing);
+}
+
+uint16_t LoRa_Manager_Buffer_PeekAck(uint8_t *scratch_buf, uint16_t scratch_len) {
+    if (s_AckRing.Count == 0) return 0;
+    
+    uint16_t len = s_AckRing.Count;
+    if (len > scratch_len) len = scratch_len;
+    
+    uint16_t chunk1 = s_AckRing.Size - s_AckRing.Tail;
+    if (len <= chunk1) {
+        memcpy(scratch_buf, &s_AckRing.pBuffer[s_AckRing.Tail], len);
+    } else {
+        memcpy(scratch_buf, &s_AckRing.pBuffer[s_AckRing.Tail], chunk1);
+        memcpy(scratch_buf + chunk1, &s_AckRing.pBuffer[0], len - chunk1);
+    }
+    return len;
+}
+
+void LoRa_Manager_Buffer_PopAck(uint16_t len) {
+    uint8_t dummy;
+    
+    uint32_t primask = OSAL_EnterCritical();
+    
+    for(uint16_t i=0; i<len; i++) {
+        LoRa_RingBuffer_Read(&s_AckRing, &dummy, 1);
+    }
+    
+    OSAL_ExitCritical(primask);
+}
+
+// ============================================================
+//                    接收处理 (RX Buffer)
+// ============================================================
+
+uint16_t LoRa_Manager_Buffer_PullFromPort(void) {
+    // 这里可以使用小一点的栈变量，因为是从 DMA 读，通常不会太大
+    uint8_t temp_buf[64]; 
+    uint16_t total_read = 0;
+    
+    while (1) {
+        uint16_t len = LoRa_Port_ReceiveData(temp_buf, sizeof(temp_buf));
+        if (len == 0) break;
+        
+        // [新增] 打印接收到的原始数据
+        LORA_HEXDUMP("RX RAW", temp_buf, len);
+        
+        // RX 仅由单线程 Run 调用，不需要加锁
+        LoRa_RingBuffer_Write(&s_RxRing, temp_buf, len);
+        total_read += len;
+    }
+    return total_read;
+}
+
+bool LoRa_Manager_Buffer_GetRxPacket(LoRa_Packet_t *packet, uint16_t local_id, uint16_t group_id,
+                                     uint8_t *scratch_buf, uint16_t scratch_len) {
+    LORA_CHECK(packet && scratch_buf && scratch_len > 0, false);
+    
+    uint16_t count = LoRa_RingBuffer_GetCount(&s_RxRing);
+    if (count > scratch_len) count = scratch_len; // 保护防止溢出
+    
+    // 1. 偷看所有数据 (Peek) 到共享缓冲区
+    uint16_t chunk1 = s_RxRing.Size - s_RxRing.Tail;
+    if (count <= chunk1) {
+        memcpy(scratch_buf, &s_RxRing.pBuffer[s_RxRing.Tail], count);
+    } else {
+        memcpy(scratch_buf, &s_RxRing.pBuffer[s_RxRing.Tail], chunk1);
+        memcpy(scratch_buf + chunk1, &s_RxRing.pBuffer[0], count - chunk1);
+    }
+    
+    // 2. 尝试解析
+    uint16_t consumed = LoRa_Manager_Protocol_Unpack(scratch_buf, count, packet, local_id, group_id);
+    
+    // 3. 如果消耗了数据，从 RingBuffer 移除
+    if (consumed > 0) {
+        uint8_t dummy;
+        for(uint16_t i=0; i<consumed; i++) {
+            LoRa_RingBuffer_Read(&s_RxRing, &dummy, 1);
+        }
+        
+        // 只有当 packet 被有效填充时才返回 true
+        return (packet->IsAckPacket || packet->PayloadLen > 0);
+    }
+    
+    return false;
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\3_Manager\lora_manager_buffer.h">
+```h
+/**
+  ******************************************************************************
+  * @file    lora_manager_buffer.h
+  * @author  LoRaPlat Team
+  * @brief   LoRa 收发缓冲区管理接口 (双队列策略 + 线程安全)
+  ******************************************************************************
+  */
+
+#ifndef __LORA_MANAGER_BUFFER_H
+#define __LORA_MANAGER_BUFFER_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include "lora_manager_protocol.h"
+
+// ============================================================
+//                    1. 初始化
+// ============================================================
+
+/**
+ * @brief  初始化收发缓冲区 (Tx Ring, Ack Ring, Rx Ring)
+ */
+void LoRa_Manager_Buffer_Init(void);
+
+// ============================================================
+//                    2. 普通发送队列 (Tx Queue)
+// ============================================================
+
+/**
+ * @brief  将普通数据包推入发送队列 (线程安全)
+ * @param  packet: 待发送的数据包结构体
+ * @param  tmode: 传输模式
+ * @param  channel: 信道
+ * @param  scratch_buf: 外部传入的栈缓冲区 (用于序列化)
+ * @param  scratch_len: 缓冲区长度
+ * @return true=成功入队, false=队列满
+ */
+bool LoRa_Manager_Buffer_PushTx(const LoRa_Packet_t *packet, uint8_t tmode, uint8_t channel, 
+                                uint8_t *scratch_buf, uint16_t scratch_len);
+
+/**
+ * @brief  检查普通发送队列是否有数据
+ */
+bool LoRa_Manager_Buffer_HasTxData(void);
+
+/**
+ * @brief  从普通发送队列头部预览数据 (Peek)
+ * @param  scratch_buf: 输出缓冲区
+ * @param  scratch_len: 缓冲区大小
+ * @return 数据长度
+ */
+uint16_t LoRa_Manager_Buffer_PeekTx(uint8_t *scratch_buf, uint16_t scratch_len);
+
+/**
+ * @brief  从普通发送队列移除已发送的数据 (Pop) (线程安全)
+ * @param  len: 要移除的长度
+ */
+void LoRa_Manager_Buffer_PopTx(uint16_t len);
+
+// ============================================================
+//                    3. ACK 高优先级队列 (Ack Queue)
+// ============================================================
+
+/**
+ * @brief  将 ACK 包推入高优先级队列 (线程安全)
+ * @note   ACK 包通常很小 (<20字节)，且必须优先发送
+ */
+bool LoRa_Manager_Buffer_PushAck(const LoRa_Packet_t *packet, uint8_t tmode, uint8_t channel, 
+                                 uint8_t *scratch_buf, uint16_t scratch_len);
+
+/**
+ * @brief  检查 ACK 队列是否有数据
+ */
+bool LoRa_Manager_Buffer_HasAckData(void);
+
+/**
+ * @brief  从 ACK 队列头部预览数据
+ */
+uint16_t LoRa_Manager_Buffer_PeekAck(uint8_t *scratch_buf, uint16_t scratch_len);
+
+/**
+ * @brief  从 ACK 队列移除数据 (线程安全)
+ */
+void LoRa_Manager_Buffer_PopAck(uint16_t len);
+
+// ============================================================
+//                    4. 接收处理 (RX Buffer)
+// ============================================================
+
+/**
+ * @brief  从 Port 层拉取数据并推入 RX RingBuffer
+ * @return 拉取到的字节数
+ */
+uint16_t LoRa_Manager_Buffer_PullFromPort(void);
+
+/**
+ * @brief  尝试从 RX RingBuffer 解析一个完整包
+ * @param  packet: 输出结构体
+ * @param  local_id: 本地 ID
+ * @param  group_id: 组 ID
+ * @param  scratch_buf: 外部传入的共享缓冲区 (RX Workspace)
+ * @param  scratch_len: 缓冲区长度
+ * @return true=解析成功, false=无完整包
+ */
+bool LoRa_Manager_Buffer_GetRxPacket(LoRa_Packet_t *packet, uint16_t local_id, uint16_t group_id,
+                                     uint8_t *scratch_buf, uint16_t scratch_len);
+
+#endif // __LORA_MANAGER_BUFFER_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\3_Manager\lora_manager_fsm.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_manager_fsm.c
+  * @author  LoRaPlat Team
+  * @brief   LoRa 协议状态机实现 (V3.8 Tickless & Decoupled)
+  ******************************************************************************
+  */
+
+#include "lora_manager_fsm.h"
+#include "lora_manager_buffer.h"
+#include "lora_port.h"
+#include "lora_osal.h"
+// [移除] #include "lora_service.h" -> 解除循环依赖
+
+#include "lora_manager.h" // [新增] 引入此头文件以获取 LORA_TIMEOUT_INFINITE 定义
+
+#include <string.h>
+
+// ============================================================
+//                    1. 内部状态定义
+// ============================================================
+
+// 注入的配置指针 (只读)
+static const LoRa_Config_t *s_FSM_Config = NULL;
+
+// 去重表条目
+typedef struct {
+    uint16_t src_id;
+    uint8_t  seq;
+    uint32_t last_seen; 
+    bool     valid;
+} DeDupEntry_t;
+
+typedef struct {
+    LoRa_FSM_State_t state;
+    
+    // [修改] 替换 timer_start 为绝对截止时间
+    uint32_t         timeout_deadline; 
+    
+    uint8_t          retry_count;
+    uint8_t          tx_seq; 
+    
+    // --- 重传/广播上下文 ---
+    uint8_t  pending_buf[LORA_MAX_PAYLOAD_LEN + 32];
+    uint16_t pending_len;
+    
+    // --- ACK 发送上下文 ---
+    struct {
+        bool     pending;
+        uint16_t target_id;
+        uint8_t  seq;
+    } ack_ctx;
+    
+    // --- 接收去重表 ---
+    DeDupEntry_t dedup_table[LORA_DEDUP_MAX_COUNT];
+    
+} FSM_Context_t;
+
+static FSM_Context_t s_FSM;
+
+// ============================================================
+//                    2. 内部辅助函数 (Actions)
+// ============================================================
+
+// [新增] 统一状态切换与超时设置
+static void _FSM_SetState(LoRa_FSM_State_t new_state, uint32_t timeout_ms) {
+    s_FSM.state = new_state;
+    if (timeout_ms == LORA_TIMEOUT_INFINITE) {
+        s_FSM.timeout_deadline = LORA_TIMEOUT_INFINITE;
+    } else {
+        s_FSM.timeout_deadline = OSAL_GetTick() + timeout_ms;
+    }
+}
+
+static void _FSM_Reset(void) {
+    // IDLE 状态无超时
+    _FSM_SetState(LORA_FSM_IDLE, LORA_TIMEOUT_INFINITE);
+    
+    s_FSM.ack_ctx.pending = false;
+    s_FSM.retry_count = 0;
+    s_FSM.pending_len = 0; 
+}
+
+static void _FSM_SendAck(void) {
+    LoRa_Packet_t pkt;
+    uint8_t ack_stack_buf[64]; 
+    
+    memset(&pkt, 0, sizeof(pkt));
+    pkt.IsAckPacket = true;
+    pkt.NeedAck = false; 
+    pkt.HasCrc = LORA_ENABLE_CRC;
+    pkt.TargetID = s_FSM.ack_ctx.target_id;
+    // [修改] 使用注入的配置
+    pkt.SourceID = s_FSM_Config->net_id;
+    pkt.Sequence = s_FSM.ack_ctx.seq; 
+    pkt.PayloadLen = 0;
+    
+    // [修改] 使用注入的配置
+    LoRa_Manager_Buffer_PushAck(&pkt, s_FSM_Config->tmode, s_FSM_Config->channel, ack_stack_buf, sizeof(ack_stack_buf));
+    
+    s_FSM.ack_ctx.pending = false;
+}
+
+static bool _FSM_CheckDuplicate(uint16_t src_id, uint8_t seq) {
+    uint32_t now = OSAL_GetTick();
+    int lru_idx = 0;
+    uint32_t min_time = 0xFFFFFFFF;
+    
+    for (int i = 0; i < LORA_DEDUP_MAX_COUNT; i++) {
+        if (s_FSM.dedup_table[i].valid) {
+            if (s_FSM.dedup_table[i].src_id == src_id) {
+                if (s_FSM.dedup_table[i].seq == seq) {
+                    s_FSM.dedup_table[i].last_seen = now; 
+                    return true; 
+                } else {
+                    s_FSM.dedup_table[i].seq = seq;
+                    s_FSM.dedup_table[i].last_seen = now;
+                    return false; 
+                }
+            }
+            if (s_FSM.dedup_table[i].last_seen < min_time) {
+                min_time = s_FSM.dedup_table[i].last_seen;
+                lru_idx = i;
+            }
+        } else {
+            lru_idx = i;
+            break; 
+        }
+    }
+    
+    s_FSM.dedup_table[lru_idx].valid = true;
+    s_FSM.dedup_table[lru_idx].src_id = src_id;
+    s_FSM.dedup_table[lru_idx].seq = seq;
+    s_FSM.dedup_table[lru_idx].last_seen = now;
+    
+    return false; 
+}
+
+// ============================================================
+//                    3. 状态处理函数 (State Handlers)
+// ============================================================
+
+static bool _FSM_Action_PhyTxScheduler(uint8_t *scratch_buf, uint16_t scratch_len, bool *is_need_ack) {
+    if (LoRa_Port_IsTxBusy()) return false;
+    
+    if (LoRa_Manager_Buffer_HasAckData()) {
+        uint16_t len = LoRa_Manager_Buffer_PeekAck(scratch_buf, scratch_len);
+        if (len > 0) {
+            LORA_HEXDUMP("TX ACK", scratch_buf, len);
+            if (LoRa_Port_TransmitData(scratch_buf, len) > 0) {
+                LoRa_Manager_Buffer_PopAck(len);
+                if (is_need_ack) *is_need_ack = false; 
+                return true;
+            }
+        }
+    }
+    else if (s_FSM.state == LORA_FSM_IDLE && LoRa_Manager_Buffer_HasTxData()) {
+        uint16_t len = LoRa_Manager_Buffer_PeekTx(scratch_buf, scratch_len);
+        if (len > 0) {
+            LORA_HEXDUMP("TX DATA", scratch_buf, len);
+            if (LoRa_Port_TransmitData(scratch_buf, len) > 0) {
+                LoRa_Manager_Buffer_PopTx(len);
+                // [注意] 这里不再调用 Service_NotifyEvent，因为解耦了。
+                // 事件通知可以移到 Manager 层，或者通过回调。
+                // 但为了简化，我们暂时保留物理层发送完成不通知，只通知逻辑层完成。
+                
+                if (is_need_ack) {
+                    // [修改] 使用注入的配置
+                    uint8_t offset = (s_FSM_Config->tmode == 1) ? 3 : 0;
+                    if (len > offset + 3) {
+                        *is_need_ack = (scratch_buf[offset + 3] & LORA_CTRL_MASK_NEED_ACK);
+                    } else {
+                        *is_need_ack = false;
+                    }
+                }
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void _FSM_State_AckDelay(uint32_t now) {
+    // [修改] 使用 deadline 判断
+    if ((int32_t)(s_FSM.timeout_deadline - now) <= 0) {
+        if (s_FSM.ack_ctx.pending) {
+            _FSM_SendAck(); 
+            LORA_LOG("[MGR] ACK Queued\r\n");
+        }
+        _FSM_SetState(LORA_FSM_IDLE, LORA_TIMEOUT_INFINITE);
+    }
+}
+
+static void _FSM_State_WaitAck(uint32_t now, uint8_t *scratch_buf, uint16_t scratch_len) {
+    // [修改] 使用 deadline 判断
+    if ((int32_t)(s_FSM.timeout_deadline - now) <= 0) {
+        if (s_FSM.retry_count < LORA_MAX_RETRY) {
+            s_FSM.retry_count++;
+            LORA_LOG("[MGR] ACK Timeout, Retry %d\r\n", s_FSM.retry_count);
+            
+            if (s_FSM.pending_len > 0) {
+                LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
+                // [修改] 使用注入的配置
+                LoRa_Manager_Buffer_PushTx(pending, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
+                
+                // 强制发送
+                LoRa_FSM_State_t backup_state = s_FSM.state;
+                s_FSM.state = LORA_FSM_IDLE;
+                if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, NULL)) {
+                    // 发送成功，重置超时
+                    _FSM_SetState(LORA_FSM_WAIT_ACK, LORA_RETRY_INTERVAL_MS);
+                } else {
+                    s_FSM.state = backup_state; 
+                }
+            } else {
+                _FSM_Reset();
+            }
+        } else {
+            LORA_LOG("[MGR] ACK Failed (Max Retry)\r\n");
+            // [注意] 解耦后无法直接调用 Service_NotifyEvent(LORA_EVENT_TX_FAILED)
+            // 这里需要 Manager 层轮询状态或回调，暂时略过，由上层超时机制兜底
+            _FSM_Reset();
+        }
+    }
+}
+
+static void _FSM_State_BroadcastRun(uint32_t now, uint8_t *scratch_buf, uint16_t scratch_len) {
+    // [修改] 使用 deadline 判断
+    if ((int32_t)(s_FSM.timeout_deadline - now) <= 0) {
+        if (s_FSM.retry_count < LORA_BROADCAST_REPEAT) {
+            s_FSM.retry_count++;
+            if (s_FSM.pending_len > 0) {
+                LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
+                // [修改] 使用注入的配置
+                LoRa_Manager_Buffer_PushTx(pending, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
+                
+                LoRa_FSM_State_t backup_state = s_FSM.state;
+                s_FSM.state = LORA_FSM_IDLE;
+                if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, NULL)) {
+                    // 发送成功，重置间隔
+                    _FSM_SetState(LORA_FSM_BROADCAST_RUN, LORA_BROADCAST_INTERVAL);
+                } else {
+                    s_FSM.state = backup_state;
+                }
+            }
+        } else {
+            // 广播结束
+            _FSM_Reset();
+        }
+    }
+}
+
+// ============================================================
+//                    4. 核心接口实现
+// ============================================================
+
+void LoRa_Manager_FSM_Init(const LoRa_Config_t *cfg) {
+    LORA_CHECK_VOID(cfg);
+    s_FSM_Config = cfg; // [关键] 保存配置指针
+    
+    _FSM_Reset();
+    s_FSM.tx_seq = 0;
+    memset(s_FSM.dedup_table, 0, sizeof(s_FSM.dedup_table));
+}
+
+// [新增] Tickless 核心接口
+uint32_t LoRa_Manager_FSM_GetNextTimeout(void) {
+    if (s_FSM.timeout_deadline == LORA_TIMEOUT_INFINITE) {
+        return LORA_TIMEOUT_INFINITE;
+    }
+
+    uint32_t now = OSAL_GetTick();
+    
+    // 处理回绕：如果 deadline < now，说明已超时
+    if ((int32_t)(s_FSM.timeout_deadline - now) <= 0) {
+        return 0; // 立即唤醒
+    } else {
+        return s_FSM.timeout_deadline - now; // 剩余时间
+    }
+}
+
+bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target_id,
+                           uint8_t *scratch_buf, uint16_t scratch_len) {
+    
+    if (s_FSM.state != LORA_FSM_IDLE) {
+        LORA_LOG("[MGR] Send Reject: Busy\r\n");
+        return false; 
+    }
+
+    LoRa_Packet_t pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    
+    pkt.IsAckPacket = false;
+    pkt.NeedAck = (LORA_ENABLE_ACK && target_id != 0xFFFF); 
+    pkt.HasCrc = LORA_ENABLE_CRC;
+    pkt.TargetID = target_id;
+    // [修改] 使用注入的配置
+    pkt.SourceID = s_FSM_Config->net_id;
+    pkt.Sequence = ++s_FSM.tx_seq;
+    pkt.PayloadLen = len;
+    if (len > LORA_MAX_PAYLOAD_LEN) len = LORA_MAX_PAYLOAD_LEN;
+    memcpy(pkt.Payload, payload, len);
+    
+    // [修改] 使用注入的配置
+    uint16_t packed_len = LoRa_Manager_Protocol_Pack(&pkt, s_FSM.pending_buf, sizeof(s_FSM.pending_buf), s_FSM_Config->tmode, s_FSM_Config->channel);
+    if (packed_len == 0) return false;
+    
+    memcpy(s_FSM.pending_buf, &pkt, sizeof(LoRa_Packet_t));
+    s_FSM.pending_len = 1; 
+
+    // [修改] 使用注入的配置
+    return LoRa_Manager_Buffer_PushTx(&pkt, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
+}
+
+bool LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet) {
+    if (packet->IsAckPacket) {
+        if (s_FSM.state == LORA_FSM_WAIT_ACK) {
+            LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
+            if (packet->Sequence == pending->Sequence) {
+                LORA_LOG("[MGR] ACK Recv (Seq %d)\r\n", packet->Sequence);
+                _FSM_Reset(); 
+            }
+        }
+        return false; 
+    } else {
+        if (_FSM_CheckDuplicate(packet->SourceID, packet->Sequence)) {
+            LORA_LOG("[MGR] Drop Duplicate\r\n");
+            if (packet->NeedAck && packet->TargetID != 0xFFFF) {
+                s_FSM.ack_ctx.target_id = packet->SourceID;
+                s_FSM.ack_ctx.seq = packet->Sequence;
+                s_FSM.ack_ctx.pending = true;
+                // [修改] 设置状态和超时
+                _FSM_SetState(LORA_FSM_ACK_DELAY, LORA_ACK_DELAY_MS);
+            }
+            return false; 
+        }
+        
+        if (packet->NeedAck && packet->TargetID != 0xFFFF) {
+            s_FSM.ack_ctx.target_id = packet->SourceID;
+            s_FSM.ack_ctx.seq = packet->Sequence;
+            s_FSM.ack_ctx.pending = true;
+            // [修改] 设置状态和超时
+            _FSM_SetState(LORA_FSM_ACK_DELAY, LORA_ACK_DELAY_MS);
+        }
+        return true; 
+    }
+}
+
+void LoRa_Manager_FSM_Run(uint8_t *scratch_buf, uint16_t scratch_len) {
+    uint32_t now = OSAL_GetTick();
+    
+    if (s_FSM.state == LORA_FSM_IDLE) {
+        bool need_ack = false;
+        if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, &need_ack)) {
+            LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
+            
+            if (pending->TargetID == 0xFFFF) {
+                s_FSM.retry_count = 0;
+                LORA_LOG("[MGR] Broadcast Start\r\n");
+                // [修改] 设置状态和超时
+                _FSM_SetState(LORA_FSM_BROADCAST_RUN, LORA_BROADCAST_INTERVAL);
+            }
+            else if (need_ack) {
+                s_FSM.retry_count = 0;
+                LORA_LOG("[MGR] Wait ACK...\r\n");
+                // [修改] 设置状态和超时
+                _FSM_SetState(LORA_FSM_WAIT_ACK, LORA_ACK_TIMEOUT_MS);
+            }
+            else {
+                _FSM_Reset();
+            }
+        }
+    }
+    
+    switch (s_FSM.state) {
+        case LORA_FSM_ACK_DELAY:
+            _FSM_State_AckDelay(now);
+            break;
+            
+        case LORA_FSM_WAIT_ACK:
+            _FSM_State_WaitAck(now, scratch_buf, scratch_len);
+            break;
+            
+        case LORA_FSM_BROADCAST_RUN:
+            _FSM_State_BroadcastRun(now, scratch_buf, scratch_len);
+            break;
+            
+        default:
+            break;
+    }
+}
+
+bool LoRa_Manager_FSM_IsBusy(void) {
+    return s_FSM.state != LORA_FSM_IDLE;
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\3_Manager\lora_manager_fsm.h">
+```h
+/**
+  ******************************************************************************
+  * @file    lora_manager_fsm.h
+  * @author  LoRaPlat Team
+  * @brief   LoRa 协议状态机定义 (V3.3.3 可靠传输版)
+  ******************************************************************************
+  */
+
+#ifndef __LORA_MANAGER_FSM_H
+#define __LORA_MANAGER_FSM_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include "lora_manager_protocol.h"
+
+
+
+
+// ============================================================
+//                    1. 状态定义
+// ============================================================
+
+typedef enum {
+    LORA_FSM_IDLE = 0,      // 空闲
+    LORA_FSM_TX_RUNNING,    // 正在发送 (等待硬件完成) - 目前简化未用
+    LORA_FSM_WAIT_ACK,      // 等待 ACK (重传计时中)
+    LORA_FSM_ACK_DELAY,      // 发送 ACK 前的延时
+    LORA_FSM_BROADCAST_RUN  // [新增] 广播盲发运行中
+} LoRa_FSM_State_t;
+
+// ============================================================
+//                    2. 核心接口
+// ============================================================
+
+/**
+ * @brief  初始化状态机
+ * @param  cfg: 配置结构体指针 (依赖注入)
+ */
+void LoRa_Manager_FSM_Init(const LoRa_Config_t *cfg); // [修改] 增加参数
+
+/**
+ * @brief  运行状态机 (周期调用)
+ * @param  scratch_buf: 共享工作区 (用于 TX 预览)
+ * @param  scratch_len: 工作区大小
+ */
+void LoRa_Manager_FSM_Run(uint8_t *scratch_buf, uint16_t scratch_len);
+
+/**
+ * @brief  处理接收到的数据包
+ * @param  packet: 接收到的包
+ * @return true=有效新包(需回调), false=重复包或ACK包(不回调)
+ */
+// 【修改】返回值改为 bool，指示是否需要回调上层
+bool LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet);
+
+/**
+ * @brief  请求发送数据
+ * @param  payload: 数据
+ * @param  len: 长度
+ * @param  target_id: 目标ID
+ * @param  scratch_buf: 栈缓冲区 (用于序列化)
+ * @param  scratch_len: 缓冲区大小
+ * @return true=成功入队
+ */
+bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target_id,
+                           uint8_t *scratch_buf, uint16_t scratch_len);
+
+/**
+ * @brief  查询是否忙碌
+ */
+bool LoRa_Manager_FSM_IsBusy(void);
+
+/**
+ * @brief  获取距离下一次超时的剩余时间 (Tickless 核心)
+ * @return 剩余毫秒数 (0=立即唤醒, INFINITE=无任务)
+ */
+uint32_t LoRa_Manager_FSM_GetNextTimeout(void); // [新增]
+
+
+#endif // __LORA_MANAGER_FSM_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\3_Manager\lora_manager_protocol.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_manager_protocol.c
+  * @author  LoRaPlat Team
+  * @brief   LoRa 协议封包解包实现
+  ******************************************************************************
+  */
+
+#include "lora_manager_protocol.h"
+#include "lora_crc16.h"
+
+#include "lora_osal.h"
+
+#include <string.h>
+
+// ============================================================
+//                    1. 封包实现 (Pack)
+// ============================================================
+
+uint16_t LoRa_Manager_Protocol_Pack(const LoRa_Packet_t *packet, 
+                                    uint8_t *buffer, 
+                                    uint16_t buffer_size,
+                                    uint8_t tmode,
+                                    uint8_t channel)
+{
+    // [修正1] 这里的参数是 buffer_size，不是 length
+    LORA_CHECK(packet && buffer && buffer_size > 0, 0);
+    
+    uint16_t idx = 0;
+    
+    // 1. 定点模式头部 (Target Addr + Channel)
+    if (tmode == 1) {
+        if (idx + 3 > buffer_size) return 0;
+        buffer[idx++] = (uint8_t)(packet->TargetID >> 8);
+        buffer[idx++] = (uint8_t)(packet->TargetID & 0xFF);
+        buffer[idx++] = channel;
+    }
+    
+    // 2. 协议头 (CM)
+    if (idx + 2 > buffer_size) return 0;
+    buffer[idx++] = LORA_PROTOCOL_HEAD_0;
+    buffer[idx++] = LORA_PROTOCOL_HEAD_1;
+    
+    // 3. 长度 (Payload Len)
+    if (idx + 1 > buffer_size) return 0;
+    buffer[idx++] = packet->PayloadLen;
+    
+    // 4. 控制字 (Ctrl)
+    uint8_t ctrl = 0;
+    if (packet->IsAckPacket) ctrl |= LORA_CTRL_MASK_TYPE;
+    if (packet->NeedAck)     ctrl |= LORA_CTRL_MASK_NEED_ACK;
+    if (packet->HasCrc)      ctrl |= LORA_CTRL_MASK_HAS_CRC;
+    
+    if (idx + 1 > buffer_size) return 0;
+    buffer[idx++] = ctrl;
+    
+    // 5. 序号 (Seq)
+    if (idx + 1 > buffer_size) return 0;
+    buffer[idx++] = packet->Sequence;
+    
+    // 6. 地址域 (TargetID + SourceID)
+    if (idx + 4 > buffer_size) return 0;
+    buffer[idx++] = (uint8_t)(packet->TargetID & 0xFF);
+    buffer[idx++] = (uint8_t)(packet->TargetID >> 8);
+    buffer[idx++] = (uint8_t)(packet->SourceID & 0xFF);
+    buffer[idx++] = (uint8_t)(packet->SourceID >> 8);
+    
+    // 7. 负载 (Payload)
+    if (packet->PayloadLen > 0) {
+        if (idx + packet->PayloadLen > buffer_size) return 0;
+        memcpy(&buffer[idx], packet->Payload, packet->PayloadLen);
+        idx += packet->PayloadLen;
+    }
+    
+    // 8. CRC16 (可选)
+    if (packet->HasCrc) {
+        // [修正2] 删除这里原本报错的 LORA_CHECK(buffer && length > 0...)
+        // 因为 buffer 在函数开头已经检查过了，且这里没有 length 变量
+        
+        // 计算范围：从协议头之后(Length)开始，到 Payload 结束
+        // 协议帧起始位置：tmode==1 ? 3 : 0
+        uint16_t frame_start = (tmode == 1) ? 3 : 0;
+        
+        // 校验内容：Length(1) + Ctrl(1) + Seq(1) + Addr(4) + Payload(N)
+        // 当前 idx 指向 CRC 存放位置
+        // 校验长度 = idx - (frame_start + 2)
+        // +2 是跳过 CM 头
+        
+        uint16_t crc_calc_start = frame_start + 2;
+        uint16_t crc_len = idx - crc_calc_start;
+        
+        uint16_t crc = LoRa_CRC16_Calculate(&buffer[crc_calc_start], crc_len);
+        
+        if (idx + 2 > buffer_size) return 0; // 确保空间足够
+        buffer[idx++] = (uint8_t)(crc & 0xFF);
+        buffer[idx++] = (uint8_t)(crc >> 8);
+    }
+    
+    // 9. 包尾 (\r\n)
+    if (idx + 2 > buffer_size) return 0;
+    buffer[idx++] = LORA_PROTOCOL_TAIL_0;
+    buffer[idx++] = LORA_PROTOCOL_TAIL_1;
+    
+    return idx;
+}
+
+// ============================================================
+//                    2. 解包实现 (Unpack)
+// ============================================================
+
+uint16_t LoRa_Manager_Protocol_Unpack(const uint8_t *buffer, 
+                                      uint16_t length, 
+                                      LoRa_Packet_t *packet,
+                                      uint16_t local_id,
+                                      uint16_t group_id)
+{
+    // 最小包长：Head(2) + Len(1) + Ctrl(1) + Seq(1) + Addr(4) + Tail(2) = 11字节
+    if (length < 11) return 0;
+    
+    // 1. 寻找包头 (CM)
+    if (buffer[0] != LORA_PROTOCOL_HEAD_0 || buffer[1] != LORA_PROTOCOL_HEAD_1) {
+        // 如果第一个字节不是头，返回 1，让调用者丢弃 1 字节后重试
+        return 1; 
+    }
+    
+    // 2. 解析基础字段
+    uint8_t p_len = buffer[2];
+    uint8_t ctrl  = buffer[3];
+    bool has_crc  = (ctrl & LORA_CTRL_MASK_HAS_CRC);
+    
+    // 3. 计算预期总长度
+    // 基础(9) + Payload(p_len) + CRC(2 if has) + Tail(2)
+    // 基础包括：Head(2)+Len(1)+Ctrl(1)+Seq(1)+Addr(4) = 9
+    uint16_t expected_len = 9 + p_len + (has_crc ? 2 : 0) + 2;
+    
+    // 4. 长度检查
+    if (expected_len > length) {
+        // 数据还不够，返回 0 表示继续等待
+        return 0; 
+    }
+    
+    // 5. 包尾检查
+    if (buffer[expected_len - 2] != LORA_PROTOCOL_TAIL_0 || 
+        buffer[expected_len - 1] != LORA_PROTOCOL_TAIL_1) {
+        // 包尾不对，说明这可能不是一个合法的包，或者长度字段被污染
+        // 丢弃包头，继续寻找
+        return 1;
+    }
+    
+    // 6. CRC 校验
+    if (has_crc) {
+        // 校验范围：从 Len(buffer[2]) 开始，到 Payload 结束
+        // 长度 = expected_len - Head(2) - CRC(2) - Tail(2) = expected_len - 6
+        uint16_t calc_len = expected_len - 6;
+        uint16_t calc_crc = LoRa_CRC16_Calculate(&buffer[2], calc_len);
+        
+        uint16_t recv_crc = (uint16_t)buffer[expected_len - 4] | 
+                            ((uint16_t)buffer[expected_len - 3] << 8);
+                            
+        if (calc_crc != recv_crc) {
+            // CRC 失败，丢弃整包
+            return expected_len; 
+        }
+    }
+    
+    // 7. 地址过滤
+    uint16_t target = (uint16_t)buffer[5] | ((uint16_t)buffer[6] << 8);
+    
+    bool accept = (target == local_id) || 
+                  (target == 0xFFFF) || 
+                  (group_id != 0 && target == group_id);
+                  
+    if (!accept) {
+        // 不是发给我的，丢弃整包
+        return expected_len;
+    }
+    
+    // 8. 填充输出结构体
+    if (packet) {
+        packet->IsAckPacket = (ctrl & LORA_CTRL_MASK_TYPE);
+        packet->NeedAck     = (ctrl & LORA_CTRL_MASK_NEED_ACK);
+        packet->HasCrc      = has_crc;
+        packet->Sequence    = buffer[4];
+        packet->TargetID    = target;
+        packet->SourceID    = (uint16_t)buffer[7] | ((uint16_t)buffer[8] << 8);
+        packet->PayloadLen  = p_len;
+        
+        if (p_len > 0 && p_len <= LORA_MAX_PAYLOAD_LEN) {
+            memcpy(packet->Payload, &buffer[9], p_len);
+        }
+    }
+    
+    return expected_len;
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\3_Manager\lora_manager_protocol.h">
+```h
+/**
+  ******************************************************************************
+  * @file    lora_manager_protocol.h
+  * @author  LoRaPlat Team
+  * @brief   LoRa 协议定义与封包解包接口
+  ******************************************************************************
+  */
+
+#ifndef __LORA_MANAGER_PROTOCOL_H
+#define __LORA_MANAGER_PROTOCOL_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include "LoRaPlatConfig.h"
+
+// ============================================================
+//                    1. 协议常量定义
+// ============================================================
+#define LORA_PROTOCOL_HEAD_0     'C'
+#define LORA_PROTOCOL_HEAD_1     'M'
+#define LORA_PROTOCOL_TAIL_0     '\r'
+#define LORA_PROTOCOL_TAIL_1     '\n'
+
+#define LORA_CTRL_MASK_TYPE      0x80 // 1=ACK, 0=Data
+#define LORA_CTRL_MASK_NEED_ACK  0x40 // 1=Need ACK
+#define LORA_CTRL_MASK_HAS_CRC   0x20 // 1=Has CRC
+
+// 最大负载长度 (根据缓冲区大小估算，预留头部开销)
+#define LORA_MAX_PAYLOAD_LEN     200
+
+// ============================================================
+//                    2. 数据包结构体
+// ============================================================
+
+/**
+ * @brief LoRa 逻辑数据包结构
+ * @note  这是解包后的结构化数据，不包含 Head/Tail 等物理层字节
+ */
+typedef struct {
+    // --- 控制域 ---
+    bool     IsAckPacket;    // 是否为 ACK 包
+    bool     NeedAck;        // 是否需要回复 ACK
+    bool     HasCrc;         // 是否包含 CRC
+    
+    // --- 地址域 ---
+    uint16_t TargetID;       // 目标 ID
+    uint16_t SourceID;       // 源 ID (发送方)
+    
+    // --- 序号与负载 ---
+    uint8_t  Sequence;       // 包序号
+    uint8_t  PayloadLen;     // 负载长度
+    uint8_t  Payload[LORA_MAX_PAYLOAD_LEN]; // 负载数据
+    
+} LoRa_Packet_t;
+
+// ============================================================
+//                    3. 核心接口
+// ============================================================
+
+/**
+ * @brief  将结构体打包为字节流 (Serialize)
+ * @param  packet: 待发送的数据包结构体
+ * @param  buffer: 输出缓冲区
+ * @param  buffer_size: 缓冲区最大大小
+ * @param  tmode: 当前传输模式 (0=透传, 1=定点) - 影响包头格式
+ * @param  channel: 当前信道 (仅定点模式需要)
+ * @return 打包后的字节总长度 (0表示失败)
+ */
+uint16_t LoRa_Manager_Protocol_Pack(const LoRa_Packet_t *packet, 
+                                    uint8_t *buffer, 
+                                    uint16_t buffer_size,
+                                    uint8_t tmode,
+                                    uint8_t channel);
+
+/**
+ * @brief  尝试从缓冲区解析一个完整数据包 (Deserialize)
+ * @param  buffer: 输入数据缓冲区
+ * @param  length: 缓冲区有效数据长度
+ * @param  packet: 输出解析后的结构体
+ * @param  local_id: 本地 ID (用于地址过滤)
+ * @param  group_id: 组 ID (用于地址过滤)
+ * @return 解析消耗的字节数 (0表示未找到完整包，>0表示成功解析并消耗了多少字节)
+ */
+uint16_t LoRa_Manager_Protocol_Unpack(const uint8_t *buffer, 
+                                      uint16_t length, 
+                                      LoRa_Packet_t *packet,
+                                      uint16_t local_id,
+                                      uint16_t group_id);
+
+#endif // __LORA_MANAGER_PROTOCOL_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\4_Service\lora_service.c">
+```c
+#include "lora_service.h"
+#include "lora_service_config.h"
+#include "lora_service_monitor.h"
+// [移除] #include "lora_service_command.h" 
+#include "lora_manager.h"
+
+#include "lora_driver.h" 
+#include "lora_port.h" 
+#include "lora_osal.h"
+#include <string.h>
+#include <stdlib.h>
+
+
+
+static LoRa_Callback_t g_cb; 
+#define CMD_PREFIX "CMD:"
+
+// [新增] 定义无穷大时间 (表示无定时任务)
+#define LORA_TIMEOUT_INFINITE   0xFFFFFFFF
+
+// ============================================================
+//                    内部回调适配
+// ============================================================
+
+static void _On_Mgr_RxData(uint8_t *data, uint16_t len, uint16_t src_id) {
+    // [修改] 彻底移除 CMD 拦截逻辑
+    // 平台不再关心数据内容，直接透传给业务层
+    // 安全性提升：防止恶意指令绕过业务层直接重置设备
+    if (g_cb.OnRecvData) {
+        LoRa_RxMeta_t meta = { .rssi = -128, .snr = 0 };
+        g_cb.OnRecvData(src_id, data, len, &meta);
+    }
+}
+
+
+// ============================================================
+//                    核心接口实现
+// ============================================================
+
+void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_id) {
+    if (callbacks) g_cb = *callbacks;
+    
+    // 1. 初始化配置模块
+    LoRa_Service_Config_Init();
+    
+    // 2. 加载 Flash 配置 (如果有)
+    if (g_cb.LoadConfig) {
+        LoRa_Config_t flash_cfg;
+        g_cb.LoadConfig(&flash_cfg);
+        if (flash_cfg.magic == LORA_CFG_MAGIC) {
+            LoRa_Service_Config_Set(&flash_cfg);
+        } else {
+            // Flash 无效，保存默认值
+            if (g_cb.SaveConfig) g_cb.SaveConfig(LoRa_Service_Config_Get());
+        }
+    }
+    
+    // 3. 调试覆盖
+    if (override_net_id != 0) {
+        LoRa_Config_t temp = *LoRa_Service_Config_Get();
+        temp.net_id = override_net_id;
+        LoRa_Service_Config_Set(&temp);
+    }
+    
+    // 4. 初始化 Manager
+    LoRa_Manager_Init(LoRa_Service_Config_Get(), _On_Mgr_RxData);
+    
+    // 5. 初始化 Driver (阻塞)
+    // 注意：这里依然调用旧的 Drv_Init，Step 4 会替换它
+    if (LoRa_Driver_Init(LoRa_Service_Config_Get())) {
+        LoRa_Service_NotifyEvent(LORA_EVENT_INIT_SUCCESS, NULL);
+    } else {
+        while(1); // 死循环报警
+    }
+}
+
+void LoRa_Service_Run(void) {
+    // 1. 运行监视器 (软件看门狗)
+    LoRa_Service_Monitor_Run();
+    
+    // 2. 运行原有逻辑
+    LoRa_Manager_Run();
+		
+}
+
+bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id) {
+    LORA_CHECK(data && len > 0, false);
+    return LoRa_Manager_Send(data, len, target_id);
+}
+
+void LoRa_Service_FactoryReset(void) {
+    LoRa_Service_Config_FactoryReset();
+    if (g_cb.SaveConfig) g_cb.SaveConfig(LoRa_Service_Config_Get());
+    LoRa_Service_NotifyEvent(LORA_EVENT_FACTORY_RESET, NULL);
+    if (g_cb.SystemReset) g_cb.SystemReset();
+}
+
+const LoRa_Config_t* LoRa_Service_GetConfig(void) {
+    return LoRa_Service_Config_Get();
+}
+
+void LoRa_Service_SetConfig(const LoRa_Config_t *cfg) {
+    LORA_CHECK_VOID(cfg);
+    LoRa_Service_Config_Set(cfg);
+    if (g_cb.SaveConfig) g_cb.SaveConfig(cfg);
+}
+
+void LoRa_Service_NotifyEvent(LoRa_Event_t event, void *arg) {
+    if (g_cb.OnEvent) g_cb.OnEvent(event, arg);
+}
+
+// [新增] 综合计算休眠时间
+uint32_t LoRa_Service_GetSleepDuration(void) {
+    // 1. 硬件层一票否决
+    if (LoRa_Driver_IsBusy()) {
+        return 0; 
+    }
+
+    // 2. 逻辑层计算剩余时间
+    uint32_t logic_sleep = LoRa_Manager_GetSleepDuration();
+    
+    // 3. 安全余量扣除 (Safety Margin)
+    // 唤醒和恢复时钟需要时间，建议扣除 2ms
+    if (logic_sleep > 2 && logic_sleep != LORA_TIMEOUT_INFINITE) {
+        return logic_sleep - 2;
+    }
+    
+    return logic_sleep;
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\4_Service\lora_service.h">
+```h
+#ifndef __LORA_SERVICE_H
+#define __LORA_SERVICE_H
+
+#include "lora_osal.h"
+#include "LoRaPlatConfig.h"
+#include <stdint.h>
+#include <stdbool.h>
+
+// ============================================================
+//                    1. 数据结构定义
+// ============================================================
+
+typedef struct {
+    int16_t rssi; 
+    int8_t  snr;  
+} LoRa_RxMeta_t;
+
+typedef enum {
+    LORA_EVENT_INIT_SUCCESS = 0,
+    LORA_EVENT_BIND_SUCCESS,    
+    LORA_EVENT_GROUP_UPDATE,    
+    LORA_EVENT_CONFIG_START,    
+    LORA_EVENT_CONFIG_COMMIT,   
+    LORA_EVENT_FACTORY_RESET,   
+    LORA_EVENT_REBOOT_REQ,      
+    LORA_EVENT_MSG_RECEIVED,    
+    
+    // --- 发送相关事件 ---
+    LORA_EVENT_MSG_SENT,        // 物理层发送完成 (DMA 传输结束)
+    LORA_EVENT_TX_FINISHED,     // 发送流程彻底结束 (收到 ACK 或 广播发完)
+    LORA_EVENT_TX_FAILED        // 发送失败 (重传次数耗尽)
+    
+} LoRa_Event_t;
+
+// ============================================================
+//                    2. 回调接口
+// ============================================================
+typedef struct {
+    void (*SaveConfig)(const LoRa_Config_t *cfg);
+    void (*LoadConfig)(LoRa_Config_t *cfg);
+    uint32_t (*GetRandomSeed)(void); 
+    void (*SystemReset)(void);       
+    void (*OnRecvData)(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta);
+    void (*OnEvent)(LoRa_Event_t event, void *arg);
+} LoRa_Callback_t;
+
+// ============================================================
+//                    3. 全局函数
+// ============================================================
+
+void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_id);
+void LoRa_Service_Run(void);
+bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id);
+
+// [新增] 获取系统建议休眠时长 (Tickless 接口)
+uint32_t LoRa_Service_GetSleepDuration(void);
+
+void LoRa_Service_FactoryReset(void);
+
+// 配置访问
+const LoRa_Config_t* LoRa_Service_GetConfig(void);
+void LoRa_Service_SetConfig(const LoRa_Config_t *cfg);
+
+// 内部通知接口 (供 Command 模块调用)
+void LoRa_Service_NotifyEvent(LoRa_Event_t event, void *arg);
+
+#endif // __LORA_SERVICE_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\4_Service\lora_service_command.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_service_command.c
+  * @author  LoRaPlat Team
+  * @brief   LoRa 平台指令解析实现 (V3.8 Fix Warnings)
+  ******************************************************************************
+  */
+
+#include "lora_service_command.h"
+#include "lora_service_config.h"
+#include "lora_service.h"
+#include "lora_osal.h"
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h> // 必须包含，用于 strtoul
+
+// ============================================================
+//                    1. 内部辅助函数
+// ============================================================
+
+// 辅助：将功率值转换为字符串
+static const char* _GetPowerStr(uint8_t power) {
+    switch(power) {
+        case 0: return "11dBm";
+        case 1: return "14dBm";
+        case 2: return "17dBm";
+        case 3: return "20dBm";
+        default: return "Unknown";
+    }
+}
+
+// 辅助：将速率值转换为字符串
+static const char* _GetRateStr(uint8_t rate) {
+    switch(rate) {
+        case 0: return "0.3k";
+        case 1: return "1.2k";
+        case 2: return "2.4k";
+        case 3: return "4.8k";
+        case 4: return "9.6k";
+        case 5: return "19.2k";
+        default: return "Unknown";
+    }
+}
+
+// ============================================================
+//                    2. 核心接口实现
+// ============================================================
+
+bool LoRa_Service_Command_Process(char *cmd_str) {
+    // 1. 获取当前配置 (用于比对 Token)
+    const LoRa_Config_t *cfg = LoRa_Service_Config_Get();
+    
+    // 2. 格式检查: CMD
+    char *prefix = strtok(cmd_str, ":"); 
+    if (prefix == NULL || strcmp(prefix, "CMD") != 0) return false;
+    
+    // 3. [安全核心] 提取并校验 Token
+    char *token_str = strtok(NULL, ":");
+    if (token_str == NULL) {
+        LORA_LOG("[SEC] Missing Token in Command!\r\n");
+        return false;
+    }
+    
+    // 使用 strtoul 解析 hex 字符串
+    uint32_t input_token = (uint32_t)strtoul(token_str, NULL, 16);
+    if (input_token != cfg->token) {
+        LORA_LOG("[SEC] Token Mismatch! Expect %08X, Got %08X\r\n", cfg->token, input_token);
+        return false; // 鉴权失败，拒绝执行
+    }
+
+    // 4. 提取具体指令与参数
+    char *cmd = strtok(NULL, "="); 
+    char *params = strtok(NULL, ""); // 获取剩余所有字符串作为参数
+
+    if (cmd == NULL) return false;
+
+    LORA_LOG("[SVC] Auth OK. Executing: %s\r\n", cmd);
+    
+    // 准备修改配置
+    LoRa_Config_t new_cfg = *cfg;
+    bool cfg_changed = false;
+
+    // --- 指令处理逻辑 ---
+
+    // INFO
+    if (strcmp(cmd, "INFO") == 0) {
+        LORA_LOG("=== LoRa Configuration ===\r\n");
+        LORA_LOG("  UUID:    %08X\r\n", new_cfg.uuid);
+        LORA_LOG("  NetID:   %d\r\n", new_cfg.net_id);
+        LORA_LOG("  Group:   %d\r\n", new_cfg.group_id);
+        LORA_LOG("  Token:   %08X\r\n", new_cfg.token);
+        LORA_LOG("  Chan:    %d\r\n", new_cfg.channel);
+        // [修复] 这里调用了辅助函数，消除了 Warning #177
+        LORA_LOG("  Power:   %s\r\n", _GetPowerStr(new_cfg.power));
+        LORA_LOG("  Rate:    %s\r\n", _GetRateStr(new_cfg.air_rate));
+        LORA_LOG("==========================\r\n");
+        return true;
+    }
+    
+    // BIND (格式: BIND=UUID,NetID)
+    else if (strcmp(cmd, "BIND") == 0 && params != NULL) {
+        uint32_t target_uuid;
+        uint16_t new_net_id;
+        
+        // 尝试解析 Hex UUID
+        int parsed = sscanf(params, "%x,%hu", &target_uuid, &new_net_id);
+        if (parsed != 2) parsed = sscanf(params, "%u,%hu", &target_uuid, &new_net_id);
+
+        if (parsed == 2) {
+            if (target_uuid == new_cfg.uuid) {
+                new_cfg.net_id = new_net_id;
+                cfg_changed = true;
+                LoRa_Service_NotifyEvent(LORA_EVENT_BIND_SUCCESS, &new_net_id);
+            } else {
+                LORA_LOG("[CMD] UUID Mismatch for BIND.\r\n");
+            }
+        }
+    }
+    
+    // RST
+    else if (strcmp(cmd, "RST") == 0) {
+        LoRa_Service_NotifyEvent(LORA_EVENT_REBOOT_REQ, NULL);
+        return true;
+    }
+    
+    // FACTORY
+    else if (strcmp(cmd, "FACTORY") == 0) {
+        LoRa_Service_FactoryReset();
+        return true;
+    }
+    
+    // 应用变更
+    if (cfg_changed) {
+        LoRa_Service_Config_Set(&new_cfg);
+        LoRa_Service_NotifyEvent(LORA_EVENT_CONFIG_COMMIT, NULL);
+        return true;
+    }
+    
+    return false;
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\4_Service\lora_service_command.h">
+```h
+/**
+  ******************************************************************************
+  * @file    lora_service_command.h
+  * @author  LoRaPlat Team
+  * @brief   LoRa 平台指令解析工具 (V3.4.1 Secure)
+  *          提供指令解析服务，但需由用户层显式调用。
+  *          格式要求: CMD:<Token>:<Command>=<Params>
+  ******************************************************************************
+  */
+
+#ifndef __LORA_SERVICE_COMMAND_H
+#define __LORA_SERVICE_COMMAND_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+/**
+ * @brief  处理平台指令字符串 (带 Token 校验)
+ * @param  cmd_str: 指令字符串 (将被 strtok 修改，请传入副本)
+ * @return true=指令鉴权通过并已执行, false=鉴权失败或格式错误
+ */
+bool LoRa_Service_Command_Process(char *cmd_str);
+
+#endif // __LORA_SERVICE_COMMAND_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\4_Service\lora_service_config.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_service_config.c
+  * @author  LoRaPlat Team
+  * @brief   LoRa 配置管理实现
+  ******************************************************************************
+  */
+
+#include "lora_service_config.h"
+#include "lora_service.h" // 获取回调接口
+#include "lora_osal.h"
+#include <string.h>
+#include <stdlib.h>
+
+// 内部静态配置副本
+static LoRa_Config_t s_CurrentConfig;
+
+// ============================================================
+//                    1. 内部辅助
+// ============================================================
+
+static void _LoadDefaults(void) {
+    memset(&s_CurrentConfig, 0, sizeof(LoRa_Config_t));
+    
+    s_CurrentConfig.magic    = LORA_CFG_MAGIC;
+    s_CurrentConfig.token    = DEFAULT_LORA_TOKEN;
+    s_CurrentConfig.net_id   = LORA_ID_UNASSIGNED;
+    s_CurrentConfig.group_id = LORA_GROUP_ID_DEFAULT; 
+    s_CurrentConfig.hw_addr  = LORA_HW_ADDR_DEFAULT;
+    s_CurrentConfig.channel  = DEFAULT_LORA_CHANNEL;
+    s_CurrentConfig.power    = (uint8_t)DEFAULT_LORA_POWER;
+    s_CurrentConfig.air_rate = (uint8_t)DEFAULT_LORA_RATE;
+    s_CurrentConfig.tmode    = (uint8_t)DEFAULT_LORA_TMODE;
+    
+    // 生成随机 UUID
+    //uint32_t seed = 0;
+    // 这里需要回调获取种子，但 Config 模块不直接依赖回调
+    // 我们假设 Service 层初始化时已经设置了回调
+    // 或者通过 OSAL 获取？
+    // 暂时策略：使用 OSAL_GetTick 作为简单种子，或者由 Service 层传入
+    // 为了解耦，我们假设 Service 层会在 Init 后再次调用 SetConfig 来修正 UUID
+    s_CurrentConfig.uuid = 0; 
+}
+
+// ============================================================
+//                    2. 核心接口实现
+// ============================================================
+
+void LoRa_Service_Config_Init(void) {
+    _LoadDefaults();
+    
+#if (defined(LORA_ENABLE_FLASH_SAVE) && LORA_ENABLE_FLASH_SAVE == 1)
+    // 尝试从 Flash 加载
+    // 这里需要回调函数，但 Config 模块不知道回调在哪里
+    // 解决方案：Service 层初始化时，将回调传递给 Config 模块？
+    // 或者 Config 模块暴露一个 SetCallbacks 接口？
+    // 简单起见，我们假设 Service 层负责调用 Load/Save，Config 模块只负责管理内存副本。
+    
+    // 修正设计：Config 模块应该只管理内存副本。Flash 读写由 Service 层协调。
+    // 但为了封装，我们可以在 Service 层把回调传进来。
+    
+    // 暂时策略：Config 模块不直接调用 Flash 接口，而是提供 Load/Save 辅助函数供 Service 层调用。
+    // 这样 Config 模块就纯粹了。
+#endif
+}
+
+const LoRa_Config_t* LoRa_Service_Config_Get(void) {
+    return &s_CurrentConfig;
+}
+
+void LoRa_Service_Config_Set(const LoRa_Config_t *cfg) {
+    if (cfg) {
+        // 【修改】适配新的临界区接口
+        uint32_t primask = OSAL_EnterCritical();
+        memcpy(&s_CurrentConfig, cfg, sizeof(LoRa_Config_t));
+        OSAL_ExitCritical(primask);
+    }
+}
+void LoRa_Service_Config_FactoryReset(void) {
+    _LoadDefaults();
+    s_CurrentConfig.magic = 0; // 标记为无效，下次上电会重置
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\4_Service\lora_service_config.h">
+```h
+/**
+  ******************************************************************************
+  * @file    lora_service_config.h
+  * @author  LoRaPlat Team
+  * @brief   LoRa 配置管理接口
+  ******************************************************************************
+  */
+
+#ifndef __LORA_SERVICE_CONFIG_H
+#define __LORA_SERVICE_CONFIG_H
+
+#include "LoRaPlatConfig.h"
+#include <stdint.h>
+#include <stdbool.h>
+
+// ============================================================
+//                    1. 核心接口
+// ============================================================
+
+/**
+ * @brief  初始化配置模块
+ * @note   优先加载 Flash，若无效则使用默认值
+ */
+void LoRa_Service_Config_Init(void);
+
+/**
+ * @brief  获取当前配置 (只读)
+ */
+const LoRa_Config_t* LoRa_Service_Config_Get(void);
+
+/**
+ * @brief  更新配置并保存到 Flash
+ * @param  cfg: 新配置
+ */
+void LoRa_Service_Config_Set(const LoRa_Config_t *cfg);
+
+/**
+ * @brief  恢复出厂设置 (清除 Flash)
+ */
+void LoRa_Service_Config_FactoryReset(void);
+
+#endif // __LORA_SERVICE_CONFIG_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\4_Service\lora_service_monitor.c">
+```c
+#include "lora_service_monitor.h"
+#include "lora_driver.h"
+#include "lora_service.h"
+#include "lora_osal.h"
+
+// 异常忙状态阈值 (10秒)
+#define LORA_MONITOR_BUSY_THRESHOLD_MS  10000
+
+static uint32_t s_BusyStartTime = 0;
+
+void LoRa_Service_Monitor_Init(void) {
+    s_BusyStartTime = 0;
+}
+
+/**
+ * @brief 核心监视逻辑：检测驱动层是否陷入永久忙碌
+ */
+void LoRa_Service_Monitor_Run(void) {
+    uint32_t now = OSAL_GetTick();
+
+    // 检查驱动是否处于忙状态 (AUX高电平或DMA传输中)
+    if (LoRa_Driver_IsBusy()) {
+        if (s_BusyStartTime == 0) {
+            s_BusyStartTime = now; // 开始计时
+        } else {
+            // 检查是否超过阈值
+            if (now - s_BusyStartTime > LORA_MONITOR_BUSY_THRESHOLD_MS) {
+                LORA_LOG("[MON] Critical Error: Driver stuck in BUSY for 10s!\r\n");
+                
+                // 触发自愈逻辑：重新初始化驱动
+                // 这会尝试拉低 RST 引脚并重新发送 AT 指令配置模块
+                const LoRa_Config_t *cfg = LoRa_Service_GetConfig();
+                if (LoRa_Driver_Init(cfg)) {
+                    LORA_LOG("[MON] Self-healing: Driver re-initialized.\r\n");
+                } else {
+                    LORA_LOG("[MON] Self-healing Failed: Hardware unresponsive.\r\n");
+                }
+                
+                s_BusyStartTime = 0; // 重置计时器
+            }
+        }
+    } else {
+        // 只要有一次不忙，就重置计时器
+        s_BusyStartTime = 0;
+    }
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\4_Service\lora_service_monitor.h">
+```h
+/**
+  ******************************************************************************
+  * @file    lora_service_monitor.h
+  * @author  LoRaPlat Team
+  * @brief   LoRaPlat 运行状态监视器 (软件看门狗)
+  ******************************************************************************
+  */
+
+#ifndef __LORA_SERVICE_MONITOR_H
+#define __LORA_SERVICE_MONITOR_H
+
+#include <stdint.h>
+
+/**
+ * @brief  初始化监视器
+ */
+void LoRa_Service_Monitor_Init(void);
+
+/**
+ * @brief  运行监视逻辑
+ * @note   在 LoRa_Service_Run 中被调用
+ */
+void LoRa_Service_Monitor_Run(void);
+
+#endif
+
+```
+</file>
+<file path="LoRaPlatForSTM32\LoRa_Plat\LoRaPlatConfig.h">
+```h
+#ifndef __LORA_PLAT_CONFIG_H
+#define __LORA_PLAT_CONFIG_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+
+// ============================================================
+//                    版本号 v3.2.1
+// ============================================================
+
+
+// ============================================================
+//                    0. 原port层参数配置
+// ============================================================
+
+// [删除] #define LORA_UART_BAUDRATE  115200
+// [新增] 如下：
+#define LORA_TARGET_BAUDRATE    9600  // 目标通信波特率
+
+
+
+
+
+// 空中速率
+typedef enum {
+    LORA_RATE_0K3 = 0, LORA_RATE_1K2, LORA_RATE_2K4,
+    LORA_RATE_4K8, LORA_RATE_9K6, LORA_RATE_19K2
+} LoRa_AirRate_t;
+
+// 发射功率
+typedef enum {
+    LORA_POWER_11dBm = 0, LORA_POWER_14dBm,
+    LORA_POWER_17dBm, LORA_POWER_20dBm
+} LoRa_Power_t;
+
+// 传输模式
+typedef enum {
+    LORA_TMODE_TRANSPARENT = 0, // 透传模式 (默认)
+    LORA_TMODE_FIXED       = 1  // 定向模式
+} LoRa_TMode_t;
+
+// ============================================================
+//                    2. 默认出厂配置
+// ============================================================
+#define DEFAULT_LORA_CHANNEL    23              // 默认信道 23 (433MHz)
+#define DEFAULT_LORA_RATE       LORA_RATE_19K2  // 默认高速
+#define DEFAULT_LORA_POWER      LORA_POWER_11dBm // 默认低功耗
+#define DEFAULT_LORA_TMODE      LORA_TMODE_TRANSPARENT
+#define DEFAULT_LORA_TOKEN      0x00000000      // 默认安全令牌
+
+// 特殊 ID 定义
+#define LORA_ID_UNASSIGNED      0x0000          // 未分配 ID (新设备默认)
+#define LORA_ID_BROADCAST       0xFFFF          // 广播 ID
+#define LORA_HW_ADDR_DEFAULT    0x0000          // 默认物理地址 (全通)
+#define LORA_GROUP_ID_DEFAULT   0x0000          // 默认组 ID (0表示无分组或默认组)
+
+// ============================================================
+//                    3. 配置结构体
+// ============================================================
+// [修改] Magic变更为0x5E以强制刷新旧Flash结构 (V3.0 Update)
+#define LORA_CFG_MAGIC          0x5E            
+
+typedef struct {
+    uint8_t  magic;             // 有效标志
+    
+    // --- 身份识别 (Identity) ---
+    uint32_t uuid;              // 32位唯一标识 (随机生成，终身不变)
+    uint16_t net_id;            // 逻辑 ID (用于业务通信)
+    uint16_t group_id;          // [新增] 组 ID (用于组播/逻辑分组)
+    uint32_t token;             // 安全令牌 (可选)
+    
+    // --- 硬件参数 (Physical) ---
+    uint16_t hw_addr;           // 物理地址 (写入模块AT+ADDR，通常为0)
+    uint8_t  channel;           // 信道 (0-31)
+    uint8_t  power;             // 功率 (0-3)
+    uint8_t  air_rate;          // 空速 (0-5)
+    uint8_t  tmode;             // 传输模式 (0=透传, 1=定向)
+    
+    uint8_t  padding[1];        // 对齐保留 (调整padding以保持4字节对齐)
+} LoRa_Config_t;
+
+// ============================================================
+//                    4. LoRaPlat内部系统参数配置 (LoRaPlat System Parameters)
+// ============================================================
+
+/**
+ * @brief ACK 确认机制开关
+ * @note  true:  开启。发送数据时，如果设置了需要ACK，协议栈会等待接收方的确认包。
+ *               如果超时未收到，会自动触发重传。适合对可靠性要求高的场景（如报警、控制指令）。
+ *        false: 关闭。发送即忘（Fire and Forget）。适合对实时性要求高、允许少量丢包
+ *               或通过上层业务逻辑保证可靠性的场景（如高频传感器数据上报）。
+ */
+#define LORA_ENABLE_ACK         true
+
+/**
+ * @brief CRC16 数据校验开关
+ * @note  true:  开启。协议栈会在数据包尾部附加2字节的CRC校验码。接收方会计算校验码，
+ *               如果不匹配则直接丢弃该包，防止因无线干扰导致的乱码数据进入业务层。
+ *        false: 关闭。节省2字节开销，但应用层可能收到错误的数据。
+ */
+#define LORA_ENABLE_CRC         true
+
+/**
+ * @brief 调试日志开关
+ * @note  1: 开启。通过 OSAL_Log 输出日志。
+ *        0: 关闭。所有日志语句在编译阶段被移除，零开销。
+ */
+#define LORA_DEBUG_PRINT        1 
+
+/**
+ * @brief ACK 回复延时 (单位: ms)
+ * @note  从机在收到数据后，不会立即回复 ACK，而是等待这段时间再发。
+ *        原因：LoRa 模块是半双工的，主机发送完数据后，需要几十毫秒的时间从 TX 模式
+ *        切换回 RX 模式。如果从机回复太快，主机还没准备好接收，ACK 就会丢失。
+ *        建议值：50~200ms。
+ */
+#define LORA_ACK_DELAY_MS       100
+
+/**
+ * @brief 发送超时时间 (单位: ms)
+ * @note  指数据写入串口并启动 DMA 发送后，等待“发送完成”信号的最长时间。
+ *        如果超过这个时间模块还没发完（比如模块死机或 AUX 信号异常），
+ *        协议栈会判定发送失败并复位状态机，防止程序卡死。
+ */
+#define LORA_TX_TIMEOUT_MS      1000
+
+/**
+ * @brief 等待 ACK 超时时间 (单位: ms)
+ * @note  主机发送数据后，等待从机回复 ACK 的最长耐心时间。
+ *        这个时间必须大于 (空中传输时间 + LORA_ACK_DELAY_MS + 从机处理时间)。
+ *        如果超时未收到 ACK，协议栈会触发重传逻辑。
+ */
+#define LORA_ACK_TIMEOUT_MS     2000
+
+/**
+ * @brief 最大重传次数
+ * @note  当等待 ACK 超时后，协议栈会自动重试发送的次数。
+ *        例如设置为 3，则总共最多尝试发送 1(初次) + 3(重试) = 4 次。
+ *        如果重传这么多次依然失败，回调函数会报告 LORA_ERR_ACK_TIMEOUT 错误。
+ */
+#define LORA_MAX_RETRY          3
+
+/**
+ * @brief Flash 参数保存开关
+ * @note  1: 开启。支持掉电保存配置 (NetID, Channel 等)。
+ *           初始化时会尝试从 Flash 读取参数覆盖默认值。
+ *           收到 CMD:CFG 指令时会将新参数写入 Flash。但需要用户
+ *					 自己实现非易失性存储
+ *        0: 关闭。纯内存模式。
+ *           每次上电都强制使用代码中的默认宏 (DEFAULT_LORA_xxx)。
+ *           适合批量量产（通过修改 Hex/宏）或防止参数被意外篡改。
+ */
+#define LORA_ENABLE_FLASH_SAVE  1
+
+// ============================================================
+//                    5. 协议栈高级参数 (Advanced)
+// ============================================================
+/**
+ * @brief 重传间隔时间 (单位: ms)
+ * @note  发送数据后，如果超过此时间未收到 ACK，将触发重传。
+ *        建议值：1500ms (需大于 LORA_ACK_DELAY_MS + 空中传输时间)
+ */
+#define LORA_RETRY_INTERVAL_MS  1500
+
+/**
+ * @brief 接收去重表大小
+ * @note  记录最近活跃的 N 个设备的 ID 和 Seq，用于过滤重复包。
+ *        采用 LRU (最近最少使用) 策略淘汰旧条目。
+ *        建议值：4~8 (视 RAM 资源而定，每条目约占用 8 字节)
+ */
+#define LORA_DEDUP_MAX_COUNT    4
+
+
+// ============================================================
+//                    6. 缓冲区配置 (Buffer Config)
+// ============================================================
+#define MGR_TX_BUF_SIZE     512   // 发送队列大小
+#define MGR_RX_BUF_SIZE     512   // 接收缓冲区大小
+
+// ============================================================
+//                    7. 广播模式参数配置
+// ============================================================
+
+/**
+ * @brief 广播包盲发次数
+ * @note  广播包没有 ACK 机制，为了提高送达率，采用连续多次发送的策略。
+ *        建议值：3 (即发送 1 次 + 重发 2 次)
+ */
+#define LORA_BROADCAST_REPEAT   3
+
+/**
+ * @brief 广播包发送间隔 (单位: ms)
+ * @note  连续发送广播包之间的“留白”时间，给接收端处理喘息的机会。
+ *        建议值：50ms
+ */
+#define LORA_BROADCAST_INTERVAL 50
+
+
+
+#endif // __LORA_PLAT_CONFIG_H
+
+```
+</file>
+<file path="LoRaPlatForSTM32\Pin_Config.txt">
+```txt
+===========================================================
+              STM32F103C8T6 引脚分配表 (LoRa版)
+===========================================================
+
+[1. 调试/日志接口 (PC通信)]
+-----------------------------------------------------------
+功能        STM32引脚      外部连接
+UART1_TX    PA9           -> USB-TTL RX
+UART1_RX    PA10          -> USB-TTL TX
+GND         GND           -> USB-TTL GND
+
+[2. LoRa无线模块 (ATK-LORA-01)]
+-----------------------------------------------------------
+功能        STM32引脚      外部连接          备注
+UART3_TX    PB10          -> LoRa RXD       (注意交叉连接)
+UART3_RX    PB11          -> LoRa TXD       (注意交叉连接)
+MD0         PA4           -> LoRa MD0       (模式控制: 高=配置, 低=通信)
+AUX         PA5           -> LoRa AUX       (状态指示: 模块忙时输出高)
+VCC         3.3V          -> LoRa VCC       (严禁接5V)
+GND         GND           -> LoRa GND
+
+[3. 人机交互 (LED & OLED)]
+-----------------------------------------------------------
+功能        STM32引脚      外部连接          备注
+LED1        PA1           -> LED正极        (低电平点亮/根据电路决定)
+LED2        PA2           -> LED正极        (原PA2，现保留用于LED)
+I2C_SCL     PB8           -> OLED SCL
+I2C_SDA     PB9           -> OLED SDA
+
+[4. 其他注意事项]
+-----------------------------------------------------------
+* PB11 原本可能用于 Key2，请确保已断开按键连接，否则干扰 LoRa 接收。
+* LoRa 模块天线请务必接好，防止烧坏功放。
+* 供电需稳定 3.3V，LoRa 发射瞬间电流较大。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```
+</file>
+<file path="LoRaPlatForSTM32\User\lora_demo_osal.c">
+```c
+/**
+  ******************************************************************************
+  * @file    lora_demo_osal.c
+  * @author  LoRaPlat Team
+  * @brief   OSAL 接口适配层 (STM32F103 裸机版)
+  ******************************************************************************
+  */
+
+#include "lora_osal.h"
+#include "Delay.h"      // 硬件延时实现
+#include "Serial.h"     // 硬件串口实现
+#include "stm32f10x.h"  // [关键] 引入 STM32 核心头文件以支持 __get_PRIMASK
+#include <stdio.h>
+#include <stdarg.h>
+
+// ============================================================
+//                    1. 接口适配实现
+// ============================================================
+
+// 适配 GetTick
+static uint32_t Demo_GetTick(void) {
+    return GetTick(); // 来自 System/Delay.c
+}
+
+// 适配 DelayMs
+static void Demo_DelayMs(uint32_t ms) {
+    Delay_ms(ms); // 来自 System/Delay.c
+}
+
+// 适配日志打印 (变参处理)
+static void Demo_Log(const char *fmt, va_list args) {
+    char buf[128];
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    Serial_Printf("%s", buf);
+}
+
+// 适配 HexDump
+static void Demo_LogHex(const char *tag, const void *data, uint16_t len) {
+    Serial_HexDump(tag, (const uint8_t*)data, len);
+}
+
+// [关键修复] 适配临界区 (关中断并保存状态)
+// 签名必须是: uint32_t (*)(void)
+static uint32_t Demo_EnterCritical(void) {
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    return primask;
+}
+
+// [关键修复] 适配临界区 (恢复状态)
+// 签名必须是: void (*)(uint32_t)
+static void Demo_ExitCritical(uint32_t ctx) {
+    __set_PRIMASK(ctx);
+}
+
+// ============================================================
+//                    2. 接口注册结构体
+// ============================================================
+
+static const LoRa_OSAL_Interface_t s_OsalImpl = {
+    .GetTick       = Demo_GetTick,
+    .DelayMs       = Demo_DelayMs,
+    .EnterCritical = Demo_EnterCritical, // 现在类型完全匹配了
+    .ExitCritical  = Demo_ExitCritical,  // 现在类型完全匹配了
+    .Log           = Demo_Log,
+    .LogHex        = Demo_LogHex, 
+    .Malloc        = NULL,        
+    .Free          = NULL
+};
+
+// ============================================================
+//                    3. 公开初始化函数
+// ============================================================
+
+void Demo_OSAL_Init(void) {
+    LoRa_OSAL_Init(&s_OsalImpl);
+}
+
+```
+</file>
+<file path="LoRaPlatForSTM32\User\main.c">
+```c
+/**
+  ******************************************************************************
+  * @file    main.c
+  * @author  LoRaPlat Team
+  * @brief   LoRaPlat V3.8 综合测试例程 (遥控 LED + 安全指令)
+  * @version V1.0
+  * @date    2023-10-27
+  ******************************************************************************
+  */
+
+#include "stm32f10x.h"
+#include "Delay.h"
+#include "Serial.h"
+#include "LED.h"
+#include "Flash.h"
+#include "lora_service.h" 
+#include "lora_service_command.h" 
+#include "lora_manager.h"      
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#include "lora_port.h"
+
+volatile uint8_t g_TimeoutFlag;
+extern void Demo_OSAL_Init(void);
+
+// ============================================================================
+// [配置区域] 请根据烧录目标修改此处
+// ============================================================================
+// 1 = 主机 (Master): 发送控制指令 (STM32)
+// 2 = 从机 (Slave):  执行动作 (ESP32)
+#define DEVICE_ROLE     1
+
+// 目标设备 ID (主机发给从机，从机发给主机)
+#define TARGET_ID       ((DEVICE_ROLE == 1) ? 2 : 1)
+
+// 默认安全令牌 (用于 CMD 指令鉴权)
+#define DEFAULT_TOKEN   0x00000000
+
+// ============================================================================
+// 1. 业务层加密实现 (示例：简单异或)
+// ============================================================================
+uint16_t App_XOR_Crypt(const uint8_t *in, uint16_t len, uint8_t *out) {
+    uint32_t key = LoRa_Service_GetConfig()->token;
+    for(int i=0; i<len; i++) {
+        out[i] = in[i] ^ (uint8_t)((key >> ((i % 4) * 8)) & 0xFF);
+    }
+    return len;
+}
+
+const LoRa_Cipher_t my_cipher = { .Encrypt = App_XOR_Crypt, .Decrypt = App_XOR_Crypt };
+
+// ============================================================================
+// 2. 适配层回调 (Adapter Layer)
+// ============================================================================
+
+void Adapter_SaveConfig(const LoRa_Config_t *cfg) { Flash_WriteLoRaConfig(cfg); }
+void Adapter_LoadConfig(LoRa_Config_t *cfg)       { Flash_ReadLoRaConfig(cfg); }
+uint32_t Adapter_GetRandomSeed(void)              { return LoRa_Port_GetEntropy32(); }
+void Adapter_SystemReset(void)                    { NVIC_SystemReset(); }
+
+// [核心] 接收数据回调
+void Adapter_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta) {
+    // 1. 打印日志 (此时 data 已经是解密后的明文)
+    // 注意：data 未必以 \0 结尾，使用 %.*s 格式化
+    Serial_Printf("[RX] From 0x%04X (RSSI:%d): %.*s\r\n", src_id, meta->rssi, len, data);
+    
+    // 2. 业务逻辑处理 (Business Logic)
+    // 这里主要是接收 ESP32 的回传 (Echo)
+    // 如果收到 "red", "blue" 等，说明 ESP32 执行成功了
+}
+
+// 事件回调
+void Adapter_OnEvent(LoRa_Event_t event, void *arg) {
+    switch(event) {
+        case LORA_EVENT_INIT_SUCCESS: Serial_Printf("[EVT] LoRa Init OK. Role: %d\r\n", DEVICE_ROLE); break;
+        case LORA_EVENT_TX_FINISHED:  Serial_Printf("[EVT] TX Finished (ACK OK).\r\n"); LED1_Turn(); break; // LED1 闪烁表示发送成功
+        case LORA_EVENT_TX_FAILED:    Serial_Printf("[EVT] TX Failed (Timeout).\r\n"); break;
+        case LORA_EVENT_BIND_SUCCESS: Serial_Printf("[EVT] Bind ID: %d\r\n", *(uint16_t*)arg); break;
+        default: break;
+    }
+}
+
+const LoRa_Callback_t my_adapter = {
+    .SaveConfig = Adapter_SaveConfig, .LoadConfig = Adapter_LoadConfig,
+    .GetRandomSeed = Adapter_GetRandomSeed, .SystemReset = Adapter_SystemReset,
+    .OnRecvData = Adapter_OnRecvData, .OnEvent = Adapter_OnEvent
+};
+
+// ============================================================================
+// 3. 辅助函数：首次运行初始化
+// ============================================================================
+void Check_First_Run(void) {
+    LoRa_Config_t cfg;
+    Flash_ReadLoRaConfig(&cfg);
+    if (cfg.magic != LORA_CFG_MAGIC) {
+        Serial_Printf("[SYS] First Run, Writing Defaults...\r\n");
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.magic = LORA_CFG_MAGIC;
+        cfg.net_id = DEVICE_ROLE; // 1 or 2
+        cfg.group_id = 100;
+        cfg.token = DEFAULT_TOKEN;
+        cfg.hw_addr = 0;
+        cfg.channel = 23;
+        cfg.power = 0; // 11dBm
+        cfg.air_rate = 5; // 19.2k
+        cfg.tmode = 0; // Transparent
+        Flash_WriteLoRaConfig(&cfg);
+        NVIC_SystemReset();
+    }
+}
+
+// ============================================================================
+// 4. 主函数
+// ============================================================================
+int main(void)
+{
+    // 硬件初始化
+    SysTick_Init();
+    LED_Init();
+    Serial_Init();
+    Demo_OSAL_Init();
+    Check_First_Run(); // 检查 Flash
+    
+    // 注册加密算法 (可选)
+    LoRa_Manager_RegisterCipher(&my_cipher);
+    
+    // 启动协议栈
+    // 强制覆盖 NetID 以匹配当前 Role (方便调试，实际产品可去掉)
+    LoRa_Service_Init(&my_adapter, DEVICE_ROLE); 
+
+    Serial_Printf("\r\n=== LoRaPlat V3.8 Demo (ID: %d) ===\r\n", DEVICE_ROLE);
+    Serial_Printf("Commands: 'red', 'blue', 'white', 'off'\r\n");
+    Serial_Printf("Admin: 'CMD:00000000:INFO'\r\n");
+
+    char input_buf[128];
+    uint32_t last_heartbeat = 0;
+
+    while (1)
+    {
+        // 1. 协议栈驱动
+        LoRa_Service_Run();
+
+        // 2. PC 串口指令处理 (用户输入)
+        if (Serial_GetRxPacket(input_buf, sizeof(input_buf))) {
+            Serial_Printf("[PC] Input: %s\r\n", input_buf);
+            
+            // --- 颜色控制指令 (发送给 ESP32) ---
+            // 使用 strncmp 避免回车换行符干扰
+            if (strncmp(input_buf, "red", 3) == 0) {
+                if (LoRa_Service_Send((uint8_t*)"red", 3, TARGET_ID))
+                    Serial_Printf(" -> Sending 'red'...\r\n");
+                else
+                    Serial_Printf(" -> Send Failed (Busy)\r\n");
+            }
+            else if (strncmp(input_buf, "blue", 4) == 0 || strncmp(input_buf, "bule", 4) == 0) {
+                if (LoRa_Service_Send((uint8_t*)"blue", 4, TARGET_ID))
+                    Serial_Printf(" -> Sending 'blue'...\r\n");
+                else
+                    Serial_Printf(" -> Send Failed (Busy)\r\n");
+            }
+            else if (strncmp(input_buf, "white", 5) == 0) {
+                if (LoRa_Service_Send((uint8_t*)"white", 5, TARGET_ID))
+                    Serial_Printf(" -> Sending 'white'...\r\n");
+                else
+                    Serial_Printf(" -> Send Failed (Busy)\r\n");
+            }
+            else if (strncmp(input_buf, "off", 3) == 0) {
+                if (LoRa_Service_Send((uint8_t*)"off", 3, TARGET_ID))
+                    Serial_Printf(" -> Sending 'off'...\r\n");
+                else
+                    Serial_Printf(" -> Send Failed (Busy)\r\n");
+            }
+            
+            // --- 本地管理指令 (配置自己) ---
+            // 格式: CMD:Token:Command
+            else if (strncmp(input_buf, "CMD:", 4) == 0) {
+                if (LoRa_Service_Command_Process(input_buf))
+                    Serial_Printf(" -> Admin Cmd Executed.\r\n");
+                else
+                    Serial_Printf(" -> Admin Cmd Failed.\r\n");
+            }
+            else {
+                Serial_Printf(" -> Unknown Command.\r\n");
+            }
+        }
+
+        // 3. 心跳 (仅 LED1 闪烁，LED2 用于业务指示)
+        if (GetTick() - last_heartbeat > 1000) {
+            last_heartbeat = GetTick();
+            LED1_Turn(); 
+        }
+    }
+}
+
+```
+</file>
+<file path="stm32端双机互传测试main文件.txt">
+```txt
+/**
+  ******************************************************************************
+  * @file    main.c
+  * @author  LoRaPlat Team
+  * @brief   LoRaPlat V3.8 综合测试例程 (遥控 LED + 安全指令)
+  * @version V1.0
+  * @date    2023-10-27
+  ******************************************************************************
+  */
+
+#include "stm32f10x.h"
+#include "Delay.h"
+#include "Serial.h"
+#include "LED.h"
+#include "Flash.h"
+#include "lora_service.h" 
+#include "lora_service_command.h" 
+#include "lora_manager.h"      
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#include "lora_port.h"
+
+volatile uint8_t g_TimeoutFlag;
+extern void Demo_OSAL_Init(void);
+// ============================================================================
+// [配置区域] 请根据烧录目标修改此处
+// ============================================================================
+// 1 = 主机 (Master): 发送控制指令
+// 2 = 从机 (Slave):  执行动作 (亮灯)
+#define DEVICE_ROLE     1
+
+// 目标设备 ID (主机发给从机，从机发给主机)
+#define TARGET_ID       ((DEVICE_ROLE == 1) ? 2 : 1)
+
+// 默认安全令牌 (用于 CMD 指令鉴权)
+#define DEFAULT_TOKEN   0x00000000
+
+// ============================================================================
+// 1. 业务层加密实现 (示例：简单异或)
+// ============================================================================
+uint16_t App_XOR_Crypt(const uint8_t *in, uint16_t len, uint8_t *out) {
+    uint32_t key = LoRa_Service_GetConfig()->token;
+    for(int i=0; i<len; i++) {
+        out[i] = in[i] ^ (uint8_t)((key >> ((i % 4) * 8)) & 0xFF);
+    }
+    return len;
+}
+
+const LoRa_Cipher_t my_cipher = { .Encrypt = App_XOR_Crypt, .Decrypt = App_XOR_Crypt };
+
+// ============================================================================
+// 2. 适配层回调 (Adapter Layer)
+// ============================================================================
+
+void Adapter_SaveConfig(const LoRa_Config_t *cfg) { Flash_WriteLoRaConfig(cfg); }
+void Adapter_LoadConfig(LoRa_Config_t *cfg)       { Flash_ReadLoRaConfig(cfg); }
+uint32_t Adapter_GetRandomSeed(void)              { return LoRa_Port_GetEntropy32(); }
+void Adapter_SystemReset(void)                    { NVIC_SystemReset(); }
+
+// [核心] 接收数据回调
+void Adapter_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta) {
+    // 1. 打印日志 (此时 data 已经是解密后的明文)
+    Serial_Printf("[RX] From 0x%04X (RSSI:%d): %.*s\r\n", src_id, meta->rssi, len, data);
+    
+    // 2. 业务逻辑处理 (Business Logic)
+    // ---------------------------------------------------------
+    // 场景 A: 远程 LED 控制
+    if (strncmp((char*)data, "LED_ON", 6) == 0) {
+        LED2_ON(); // 点亮板载 LED2
+        Serial_Printf("[APP] Action: LED2 ON\r\n");
+    }
+    else if (strncmp((char*)data, "LED_OFF", 7) == 0) {
+        LED2_OFF(); // 熄灭板载 LED2
+        Serial_Printf("[APP] Action: LED2 OFF\r\n");
+    }
+    
+    // 场景 B: 平台管理指令 (CMD:Token:...)
+    // 注意：这是可选功能，由用户决定是否启用
+    else if (len > 4 && strncmp((char*)data, "CMD:", 4) == 0) {
+        char cmd_buf[128];
+        if (len < sizeof(cmd_buf)) {
+            memcpy(cmd_buf, data, len);
+            cmd_buf[len] = '\0';
+            if (LoRa_Service_Command_Process(cmd_buf)) {
+                Serial_Printf("[APP] Admin Command Executed.\r\n");
+            } else {
+                Serial_Printf("[APP] Admin Command Rejected.\r\n");
+            }
+        }
+    }
+}
+
+// 事件回调
+void Adapter_OnEvent(LoRa_Event_t event, void *arg) {
+    switch(event) {
+        case LORA_EVENT_INIT_SUCCESS: Serial_Printf("[EVT] LoRa Init OK. Role: %d\r\n", DEVICE_ROLE); break;
+        case LORA_EVENT_TX_FINISHED:  Serial_Printf("[EVT] TX Finished (ACK OK).\r\n"); LED1_Turn(); break; // LED1 闪烁表示发送成功
+        case LORA_EVENT_TX_FAILED:    Serial_Printf("[EVT] TX Failed (Timeout).\r\n"); break;
+        case LORA_EVENT_BIND_SUCCESS: Serial_Printf("[EVT] Bind ID: %d\r\n", *(uint16_t*)arg); break;
+        default: break;
+    }
+}
+
+const LoRa_Callback_t my_adapter = {
+    .SaveConfig = Adapter_SaveConfig, .LoadConfig = Adapter_LoadConfig,
+    .GetRandomSeed = Adapter_GetRandomSeed, .SystemReset = Adapter_SystemReset,
+    .OnRecvData = Adapter_OnRecvData, .OnEvent = Adapter_OnEvent
+};
+
+// ============================================================================
+// 3. 辅助函数：首次运行初始化
+// ============================================================================
+void Check_First_Run(void) {
+    LoRa_Config_t cfg;
+    Flash_ReadLoRaConfig(&cfg);
+    if (cfg.magic != LORA_CFG_MAGIC) {
+        Serial_Printf("[SYS] First Run, Writing Defaults...\r\n");
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.magic = LORA_CFG_MAGIC;
+        cfg.net_id = DEVICE_ROLE; // 1 or 2
+        cfg.group_id = 100;
+        cfg.token = DEFAULT_TOKEN;
+        cfg.hw_addr = 0;
+        cfg.channel = 23;
+        cfg.power = 0; // 11dBm
+        cfg.air_rate = 5; // 19.2k
+        cfg.tmode = 0; // Transparent
+        Flash_WriteLoRaConfig(&cfg);
+        NVIC_SystemReset();
+    }
+}
+
+// ============================================================================
+// 4. 主函数
+// ============================================================================
+int main(void)
+{
+    // 硬件初始化
+    SysTick_Init();
+    LED_Init();
+    Serial_Init();
+    Demo_OSAL_Init();
+    Check_First_Run(); // 检查 Flash
+    
+    // 注册加密算法 (可选)
+    LoRa_Manager_RegisterCipher(&my_cipher);
+    
+    // 启动协议栈
+    // 强制覆盖 NetID 以匹配当前 Role (方便调试，实际产品可去掉)
+    LoRa_Service_Init(&my_adapter, DEVICE_ROLE); 
+
+    Serial_Printf("\r\n=== LoRaPlat V3.8 Demo (ID: %d) ===\r\n", DEVICE_ROLE);
+    if (DEVICE_ROLE == 1) {
+        Serial_Printf("Type 'ON'  -> Send LED_ON to Slave\r\n");
+        Serial_Printf("Type 'OFF' -> Send LED_OFF to Slave\r\n");
+    }
+    Serial_Printf("Type 'CMD:00000000:INFO' -> Check Config\r\n");
+
+    char input_buf[128];
+    uint32_t last_heartbeat = 0;
+
+    while (1)
+    {
+        // 1. 协议栈驱动
+        LoRa_Service_Run();
+
+        // 2. PC 串口指令处理 (用户输入)
+        if (Serial_GetRxPacket(input_buf, sizeof(input_buf))) {
+            Serial_Printf("[PC] Input: %s\r\n", input_buf);
+            
+            // --- 业务指令 (发送给对方) ---
+            if (strcmp(input_buf, "ON") == 0) {
+                if (LoRa_Service_Send((uint8_t*)"LED_ON", 6, TARGET_ID))
+                    Serial_Printf(" -> Sending LED_ON...\r\n");
+                else
+                    Serial_Printf(" -> Send Failed (Busy)\r\n");
+            }
+            else if (strcmp(input_buf, "OFF") == 0) {
+                if (LoRa_Service_Send((uint8_t*)"LED_OFF", 7, TARGET_ID))
+                    Serial_Printf(" -> Sending LED_OFF...\r\n");
+                else
+                    Serial_Printf(" -> Send Failed (Busy)\r\n");
+            }
+            
+            // --- 本地管理指令 (配置自己) ---
+            // 格式: CMD:Token:Command
+            else if (strncmp(input_buf, "CMD:", 4) == 0) {
+                if (LoRa_Service_Command_Process(input_buf))
+                    Serial_Printf(" -> Admin Cmd Executed.\r\n");
+                else
+                    Serial_Printf(" -> Admin Cmd Failed.\r\n");
+            }
+        }
+
+        // 3. 心跳 (仅 LED1 闪烁，LED2 用于业务指示)
+        if (GetTick() - last_heartbeat > 1000) {
+            last_heartbeat = GetTick();
+            LED1_Turn(); 
+        }
+    }
+}
+
+```
+</file>
+</project_files>

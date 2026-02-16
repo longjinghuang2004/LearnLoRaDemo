@@ -2,7 +2,7 @@
   ******************************************************************************
   * @file    lora_service_command.c
   * @author  LoRaPlat Team
-  * @brief   LoRa 平台指令解析实现 (V3.8 Fix Warnings)
+  * @brief   LoRa 平台指令解析实现 ( Fix Warnings)
   ******************************************************************************
   */
 
@@ -107,7 +107,7 @@ bool LoRa_Service_Command_Process(char *cmd_str) {
         // [修改] 使用 SCNx32 和 SCNu32 宏
         int parsed = sscanf(params, "%" SCNx32 ",%hu", &target_uuid, &new_net_id);
         if (parsed != 2) parsed = sscanf(params, "%" SCNu32 ",%hu", &target_uuid, &new_net_id);
-        
+
         if (parsed == 2) {
             if (target_uuid == new_cfg.uuid) {
                 new_cfg.net_id = new_net_id;

@@ -17,6 +17,8 @@ static const LoRa_Cipher_t *s_Cipher = NULL;
 
 // [新增] 发送缓存队列 (简单的结构体数组环形队列)
 #define TX_PACKET_QUEUE_SIZE 4 
+
+
 typedef struct {
     uint8_t  payload[LORA_MAX_PAYLOAD_LEN];
     uint16_t len;
