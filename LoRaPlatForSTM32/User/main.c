@@ -2,8 +2,7 @@
   ******************************************************************************
   * @file    main.c
   * @author  LoRaPlat Team
-  * @brief   LoRaPlat 综合测试例程
-  *          演示：OTA 远程配置、动态 ACK、内部自举重启
+  * @brief   LoRaPlat V3.9.3 综合测试例程 (ID Feedback & Layering Fix)
   ******************************************************************************
   */
 
@@ -14,7 +13,8 @@
 #include "Flash.h"
 #include "lora_service.h" 
 #include "lora_service_command.h" 
-#include "lora_manager.h"      
+// [修改] 移除 lora_manager.h
+// #include "lora_manager.h"      
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,13 +84,15 @@ void Adapter_OnEvent(LoRa_Event_t event, void *arg) {
             Serial_Printf("[EVT] LoRa Stack Ready. Role: %d\r\n", DEVICE_ROLE); 
             break;
             
-        case LORA_EVENT_TX_FINISHED:  
-            Serial_Printf("[EVT] TX Finished (ACK OK).\r\n"); 
+        case LORA_EVENT_TX_SUCCESS_ID:
+            // [新增] 打印成功消息 ID
+            Serial_Printf("[EVT] Msg ID:%d Sent Success (ACKed).\r\n", *(LoRa_MsgID_t*)arg); 
             LED1_Turn(); 
             break; 
             
-        case LORA_EVENT_TX_FAILED:    
-            Serial_Printf("[EVT] TX Failed (Timeout).\r\n"); 
+        case LORA_EVENT_TX_FAILED_ID:    
+            // [新增] 打印失败消息 ID
+            Serial_Printf("[EVT] Msg ID:%d Failed (Timeout).\r\n", *(LoRa_MsgID_t*)arg); 
             break;
             
         case LORA_EVENT_BIND_SUCCESS: 
@@ -106,7 +108,7 @@ void Adapter_OnEvent(LoRa_Event_t event, void *arg) {
     }
 }
 
-// 定义回调结构体 (不再需要前向声明，因为 main 在后面)
+// 定义回调结构体
 const LoRa_Callback_t my_adapter = {
     .SaveConfig = Adapter_SaveConfig, 
     .LoadConfig = Adapter_LoadConfig,
@@ -151,13 +153,13 @@ int main(void)
     Demo_OSAL_Init();
     Check_First_Run(); 
     
-    // 注册加密算法
-    LoRa_Manager_RegisterCipher(&my_cipher);
-    
     // 启动协议栈 (传入回调和 ID)
     LoRa_Service_Init(&my_adapter, DEVICE_ROLE); 
+    
+    // [修改] 使用 Service 层接口注册加密
+    LoRa_Service_RegisterCipher(&my_cipher);
 
-    Serial_Printf("\r\n=== LoRaPlat V3.4.4 OTA Test (ID: %d) ===\r\n", DEVICE_ROLE);
+    Serial_Printf("\r\n=== LoRaPlat V3.9.3 ID Feedback Test (ID: %d) ===\r\n", DEVICE_ROLE);
     Serial_Printf("Type ANY text to send (e.g., 'hello')\r\n");
     Serial_Printf("Local Admin: 'CMD:00000000:INFO'\r\n");
     Serial_Printf("Remote OTA: Send 'CMD:00000000:CFG=CH:50' from another device\r\n");
@@ -187,8 +189,11 @@ int main(void)
             // --- 通用数据发送 (发送给 ESP32) ---
             else {
                 // [关键] 使用 LORA_OPT_CONFIRMED 确保可靠传输
-                if (LoRa_Service_Send((uint8_t*)input_buf, strlen(input_buf), TARGET_ID, LORA_OPT_CONFIRMED)) {
-                    Serial_Printf(" -> Sending '%s' (Confirmed)...\r\n", input_buf);
+                // [修改] 获取并打印 MsgID
+                LoRa_MsgID_t msg_id = LoRa_Service_Send((uint8_t*)input_buf, strlen(input_buf), TARGET_ID, LORA_OPT_CONFIRMED);
+                
+                if (msg_id > 0) {
+                    Serial_Printf(" -> Enqueued ID:%d (Confirmed)...\r\n", msg_id);
                 } else {
                     Serial_Printf(" -> Send Failed (Busy)\r\n");
                 }

@@ -13,6 +13,9 @@
 
 #include "lora_osal.h"
 #include "LoRaPlatConfig.h"
+
+#include "lora_manager.h"
+
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -53,8 +56,11 @@ typedef enum {
     
     // --- 发送相关事件 ---
     LORA_EVENT_MSG_SENT,         /*!< 物理层发送完成 (DMA 传输结束) */
-    LORA_EVENT_TX_FINISHED,      /*!< 发送流程彻底结束 (收到 ACK 或 广播发完) */
-    LORA_EVENT_TX_FAILED         /*!< 发送失败 (重传次数耗尽) */
+	
+    // [修改] 带 ID 的发送结果事件
+    // arg 参数将指向 LoRa_MsgID_t 类型的变量
+    LORA_EVENT_TX_SUCCESS_ID,    /*!< 发送成功 (收到 ACK 或 UNCONFIRMED 发送完成) */
+    LORA_EVENT_TX_FAILED_ID      /*!< 发送失败 (重传次数耗尽) */
     
 } LoRa_Event_t;
 
@@ -123,16 +129,16 @@ void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_i
  * @note   处理协议栈逻辑、监视器及软重启任务
  */
 void LoRa_Service_Run(void);
-
 /**
  * @brief  发送数据
  * @param  data      数据指针
  * @param  len       数据长度
  * @param  target_id 目标逻辑 ID (0xFFFF 为广播)
  * @param  opt       发送选项 (LORA_OPT_CONFIRMED / LORA_OPT_UNCONFIRMED)
- * @return true=成功入队, false=队列满或忙
+ * @return >0: 成功入队的消息 ID (1~65535)
+ *         0:  队列满或忙，发送失败
  */
-bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt);
+LoRa_MsgID_t LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt);
 
 /**
  * @brief  请求协议栈软重启 (异步安全)
@@ -152,6 +158,18 @@ void LoRa_Service_FactoryReset(void);
  * @return 建议休眠毫秒数 (0 表示忙，不可休眠)
  */
 uint32_t LoRa_Service_GetSleepDuration(void);
+
+/**
+ * @brief  查询是否忙碌 (包含发送队列、重传等待等)
+ * @return true=忙, false=空闲 (可休眠)
+ */
+bool LoRa_Service_IsBusy(void);
+
+/**
+ * @brief  注册安全算法 (透传给 Manager 层)
+ * @param  cipher: 算法接口指针 (NULL 表示注销)
+ */
+void LoRa_Service_RegisterCipher(const LoRa_Cipher_t *cipher);
 
 // --- 配置访问 ---
 const LoRa_Config_t* LoRa_Service_GetConfig(void);

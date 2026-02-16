@@ -58,12 +58,14 @@ bool LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet);
  * @param  payload: 数据
  * @param  len: 长度
  * @param  target_id: 目标ID
- * @param  opt: 发送选项 [新增]
- * @param  scratch_buf: 栈缓冲区 (用于序列化)
+ * @param  opt: 发送选项
+ * @param  msg_id: 消息 ID [新增]
+ * @param  scratch_buf: 栈缓冲区
  * @param  scratch_len: 缓冲区大小
  * @return true=成功入队
  */
 bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt,
+                           LoRa_MsgID_t msg_id,
                            uint8_t *scratch_buf, uint16_t scratch_len);
 
 /**

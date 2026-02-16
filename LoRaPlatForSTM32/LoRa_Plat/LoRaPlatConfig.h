@@ -204,6 +204,9 @@ typedef struct {
 #define LORA_ENABLE_OTA_CFG     1       // 开启 OTA 远程配置
 #define LORA_REBOOT_DELAY_MS    3000    // 回复 ACK 后等待多久执行软重启
 
+// [新增] 消息 ID 类型定义 (0 为无效 ID)
+typedef uint16_t LoRa_MsgID_t;
+
 
 // 在 LoRaPlatConfig.h 底部添加
 typedef struct {

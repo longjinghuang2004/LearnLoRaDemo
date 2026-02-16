@@ -36,6 +36,9 @@ static struct {
 static const LoRa_Callback_t *s_AppCb = NULL;
 static uint16_t s_SavedNetID = 0;
 
+// [新增] 保存 Cipher 指针，用于重启后恢复
+static const LoRa_Cipher_t *s_SavedCipher = NULL;
+
 
 // ============================================================
 //                    私有函数：内部自举
@@ -74,6 +77,11 @@ static void _Service_DoReinit(void) {
     // 必须前向声明 _Service_OnRecv 或将其放在前面
     
     LoRa_Manager_Init(cfg, _Service_OnRecv);
+		
+    // [新增] 恢复加密算法注册
+    if (s_SavedCipher) {
+        LoRa_Manager_RegisterCipher(s_SavedCipher);
+    }		
     
     // 4. 重新初始化监视器
     LoRa_Service_Monitor_Init();
@@ -161,8 +169,9 @@ void LoRa_Service_Run(void) {
     }
 }
 
-bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt) {
-    LORA_CHECK(data && len > 0, false);
+// [修改] 返回 MsgID
+LoRa_MsgID_t LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt) {
+    LORA_CHECK(data && len > 0, 0);
     // 透传给 Manager 层
     return LoRa_Manager_Send(data, len, target_id, opt);
 }
@@ -214,4 +223,15 @@ void LoRa_Service_NotifyEvent(LoRa_Event_t event, void *arg) {
     if (s_AppCb && s_AppCb->OnEvent) {
         s_AppCb->OnEvent(event, arg);
     }
+}
+
+// [新增] 透传 IsBusy
+bool LoRa_Service_IsBusy(void) {
+    return LoRa_Manager_IsBusy();
+}
+
+// [新增] 透传 RegisterCipher 并保存
+void LoRa_Service_RegisterCipher(const LoRa_Cipher_t *cipher) {
+    s_SavedCipher = cipher;
+    LoRa_Manager_RegisterCipher(cipher);
 }
