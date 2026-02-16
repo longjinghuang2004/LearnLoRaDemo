@@ -9,7 +9,7 @@
 #include "lora_osal.h"
 #include "Delay.h"      // 硬件延时实现
 #include "Serial.h"     // 硬件串口实现
-#include "stm32f10x.h"  // 用于开关中断
+#include "stm32f10x.h"  // [关键] 引入 STM32 核心头文件以支持 __get_PRIMASK
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -27,28 +27,30 @@ static void Demo_DelayMs(uint32_t ms) {
     Delay_ms(ms); // 来自 System/Delay.c
 }
 
-// 适配临界区 (关中断)
-static void Demo_EnterCritical(void) {
-    __disable_irq();
-}
-
-// 适配临界区 (开中断)
-static void Demo_ExitCritical(void) {
-    __enable_irq();
-}
-
 // 适配日志打印 (变参处理)
 static void Demo_Log(const char *fmt, va_list args) {
     char buf[128];
-    // 格式化字符串
     vsnprintf(buf, sizeof(buf), fmt, args);
-    // 通过串口发送
     Serial_Printf("%s", buf);
 }
 
-// 适配 HexDump (可选，优化性能)
+// 适配 HexDump
 static void Demo_LogHex(const char *tag, const void *data, uint16_t len) {
     Serial_HexDump(tag, (const uint8_t*)data, len);
+}
+
+// [关键修复] 适配临界区 (关中断并保存状态)
+// 签名必须是: uint32_t (*)(void)
+static uint32_t Demo_EnterCritical(void) {
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    return primask;
+}
+
+// [关键修复] 适配临界区 (恢复状态)
+// 签名必须是: void (*)(uint32_t)
+static void Demo_ExitCritical(uint32_t ctx) {
+    __set_PRIMASK(ctx);
 }
 
 // ============================================================
@@ -58,11 +60,11 @@ static void Demo_LogHex(const char *tag, const void *data, uint16_t len) {
 static const LoRa_OSAL_Interface_t s_OsalImpl = {
     .GetTick       = Demo_GetTick,
     .DelayMs       = Demo_DelayMs,
-    .EnterCritical = Demo_EnterCritical,
-    .ExitCritical  = Demo_ExitCritical,
+    .EnterCritical = Demo_EnterCritical, // 现在类型完全匹配了
+    .ExitCritical  = Demo_ExitCritical,  // 现在类型完全匹配了
     .Log           = Demo_Log,
-    .LogHex        = Demo_LogHex, // 注册优化后的 HexDump
-    .Malloc        = NULL,        // 裸机不使用动态内存
+    .LogHex        = Demo_LogHex, 
+    .Malloc        = NULL,        
     .Free          = NULL
 };
 
@@ -70,10 +72,6 @@ static const LoRa_OSAL_Interface_t s_OsalImpl = {
 //                    3. 公开初始化函数
 // ============================================================
 
-/**
- * @brief 在 main.c 中调用此函数以激活 OSAL
- */
 void Demo_OSAL_Init(void) {
-    // 将本地实现注入到 LoRaPlat 核心
     LoRa_OSAL_Init(&s_OsalImpl);
 }

@@ -1,0 +1,18 @@
+# ==============================================================================
+# [修正版] LoRaPlat Porting Pin Config (ESP32-S3)
+# 基于: ATK-LORA-01 用户手册 V1.3 (6 Pin 接口)
+# ==============================================================================
+
+# --- LoRa 模组 (UART1) ---
+# LoRa_TXD          : GPIO 18  (接 ESP32 RX)
+# LoRa_RXD          : GPIO 17  (接 ESP32 TX)
+# LoRa_MD0          : GPIO 16  (输出, 默认拉低 -> 通信模式)
+# LoRa_AUX          : GPIO 15  (输入, 模块输出高表示忙)
+# LoRa_VCC          : 3.3V
+# LoRa_GND          : GND
+
+# --- 验证外设 ---
+# Status_LED        : GPIO 48  (板载 WS2812)
+# Trigger_Button    : GPIO 21  (外接按钮)
+
+

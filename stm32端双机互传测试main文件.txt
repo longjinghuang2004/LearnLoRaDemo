@@ -24,12 +24,11 @@
 
 volatile uint8_t g_TimeoutFlag;
 extern void Demo_OSAL_Init(void);
-
 // ============================================================================
 // [配置区域] 请根据烧录目标修改此处
 // ============================================================================
-// 1 = 主机 (Master): 发送控制指令 (STM32)
-// 2 = 从机 (Slave):  执行动作 (ESP32)
+// 1 = 主机 (Master): 发送控制指令
+// 2 = 从机 (Slave):  执行动作 (亮灯)
 #define DEVICE_ROLE     1
 
 // 目标设备 ID (主机发给从机，从机发给主机)
@@ -63,12 +62,34 @@ void Adapter_SystemReset(void)                    { NVIC_SystemReset(); }
 // [核心] 接收数据回调
 void Adapter_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta) {
     // 1. 打印日志 (此时 data 已经是解密后的明文)
-    // 注意：data 未必以 \0 结尾，使用 %.*s 格式化
     Serial_Printf("[RX] From 0x%04X (RSSI:%d): %.*s\r\n", src_id, meta->rssi, len, data);
     
     // 2. 业务逻辑处理 (Business Logic)
-    // 这里主要是接收 ESP32 的回传 (Echo)
-    // 如果收到 "red", "blue" 等，说明 ESP32 执行成功了
+    // ---------------------------------------------------------
+    // 场景 A: 远程 LED 控制
+    if (strncmp((char*)data, "LED_ON", 6) == 0) {
+        LED2_ON(); // 点亮板载 LED2
+        Serial_Printf("[APP] Action: LED2 ON\r\n");
+    }
+    else if (strncmp((char*)data, "LED_OFF", 7) == 0) {
+        LED2_OFF(); // 熄灭板载 LED2
+        Serial_Printf("[APP] Action: LED2 OFF\r\n");
+    }
+    
+    // 场景 B: 平台管理指令 (CMD:Token:...)
+    // 注意：这是可选功能，由用户决定是否启用
+    else if (len > 4 && strncmp((char*)data, "CMD:", 4) == 0) {
+        char cmd_buf[128];
+        if (len < sizeof(cmd_buf)) {
+            memcpy(cmd_buf, data, len);
+            cmd_buf[len] = '\0';
+            if (LoRa_Service_Command_Process(cmd_buf)) {
+                Serial_Printf("[APP] Admin Command Executed.\r\n");
+            } else {
+                Serial_Printf("[APP] Admin Command Rejected.\r\n");
+            }
+        }
+    }
 }
 
 // 事件回调
@@ -131,8 +152,11 @@ int main(void)
     LoRa_Service_Init(&my_adapter, DEVICE_ROLE); 
 
     Serial_Printf("\r\n=== LoRaPlat V3.8 Demo (ID: %d) ===\r\n", DEVICE_ROLE);
-    Serial_Printf("Commands: 'red', 'blue', 'white', 'off'\r\n");
-    Serial_Printf("Admin: 'CMD:00000000:INFO'\r\n");
+    if (DEVICE_ROLE == 1) {
+        Serial_Printf("Type 'ON'  -> Send LED_ON to Slave\r\n");
+        Serial_Printf("Type 'OFF' -> Send LED_OFF to Slave\r\n");
+    }
+    Serial_Printf("Type 'CMD:00000000:INFO' -> Check Config\r\n");
 
     char input_buf[128];
     uint32_t last_heartbeat = 0;
@@ -146,29 +170,16 @@ int main(void)
         if (Serial_GetRxPacket(input_buf, sizeof(input_buf))) {
             Serial_Printf("[PC] Input: %s\r\n", input_buf);
             
-            // --- 颜色控制指令 (发送给 ESP32) ---
-            // 使用 strncmp 避免回车换行符干扰
-            if (strncmp(input_buf, "red", 3) == 0) {
-                if (LoRa_Service_Send((uint8_t*)"red", 3, TARGET_ID))
-                    Serial_Printf(" -> Sending 'red'...\r\n");
+            // --- 业务指令 (发送给对方) ---
+            if (strcmp(input_buf, "ON") == 0) {
+                if (LoRa_Service_Send((uint8_t*)"LED_ON", 6, TARGET_ID))
+                    Serial_Printf(" -> Sending LED_ON...\r\n");
                 else
                     Serial_Printf(" -> Send Failed (Busy)\r\n");
             }
-            else if (strncmp(input_buf, "blue", 4) == 0 || strncmp(input_buf, "bule", 4) == 0) {
-                if (LoRa_Service_Send((uint8_t*)"blue", 4, TARGET_ID))
-                    Serial_Printf(" -> Sending 'blue'...\r\n");
-                else
-                    Serial_Printf(" -> Send Failed (Busy)\r\n");
-            }
-            else if (strncmp(input_buf, "white", 5) == 0) {
-                if (LoRa_Service_Send((uint8_t*)"white", 5, TARGET_ID))
-                    Serial_Printf(" -> Sending 'white'...\r\n");
-                else
-                    Serial_Printf(" -> Send Failed (Busy)\r\n");
-            }
-            else if (strncmp(input_buf, "off", 3) == 0) {
-                if (LoRa_Service_Send((uint8_t*)"off", 3, TARGET_ID))
-                    Serial_Printf(" -> Sending 'off'...\r\n");
+            else if (strcmp(input_buf, "OFF") == 0) {
+                if (LoRa_Service_Send((uint8_t*)"LED_OFF", 7, TARGET_ID))
+                    Serial_Printf(" -> Sending LED_OFF...\r\n");
                 else
                     Serial_Printf(" -> Send Failed (Busy)\r\n");
             }
@@ -180,9 +191,6 @@ int main(void)
                     Serial_Printf(" -> Admin Cmd Executed.\r\n");
                 else
                     Serial_Printf(" -> Admin Cmd Failed.\r\n");
-            }
-            else {
-                Serial_Printf(" -> Unknown Command.\r\n");
             }
         }
 
