@@ -279,6 +279,7 @@ uint32_t LoRa_Manager_FSM_GetNextTimeout(void) {
     }
 }
 
+// [修改] 增加 opt 参数
 bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt,
                            uint8_t *scratch_buf, uint16_t scratch_len) {
     
@@ -287,35 +288,39 @@ bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target
         return false; 
     }
 
-    LoRa_Packet_t pkt;
-    memset(&pkt, 0, sizeof(pkt));
+    // [优化] 将栈变量改为静态变量，避免栈溢出 (约 210 字节)
+    static LoRa_Packet_t s_TempPkt; 
+    memset(&s_TempPkt, 0, sizeof(s_TempPkt));
     
-    pkt.IsAckPacket = false;
+    s_TempPkt.IsAckPacket = false;
     
     // [关键修改] 使用 opt.NeedAck 决定是否需要 ACK
-    // 广播包 (0xFFFF) 强制不需要 ACK
     if (target_id == 0xFFFF) {
-        pkt.NeedAck = false;
+        s_TempPkt.NeedAck = false;
     } else {
-        pkt.NeedAck = opt.NeedAck; // <--- 这里使用了 opt，且不再依赖 LORA_ENABLE_ACK
+        s_TempPkt.NeedAck = opt.NeedAck;
     }
     
-    pkt.HasCrc = LORA_ENABLE_CRC;
-    pkt.TargetID = target_id;
-    pkt.SourceID = s_FSM_Config->net_id;
-    pkt.Sequence = ++s_FSM.tx_seq;
-    pkt.PayloadLen = len;
+    s_TempPkt.HasCrc = LORA_ENABLE_CRC;
+    s_TempPkt.TargetID = target_id;
+    s_TempPkt.SourceID = s_FSM_Config->net_id;
+    s_TempPkt.Sequence = ++s_FSM.tx_seq;
+    s_TempPkt.PayloadLen = len;
     if (len > LORA_MAX_PAYLOAD_LEN) len = LORA_MAX_PAYLOAD_LEN;
-    memcpy(pkt.Payload, payload, len);
+    memcpy(s_TempPkt.Payload, payload, len);
     
-    uint16_t packed_len = LoRa_Manager_Protocol_Pack(&pkt, s_FSM.pending_buf, sizeof(s_FSM.pending_buf), s_FSM_Config->tmode, s_FSM_Config->channel);
+    // 使用 s_TempPkt 进行打包
+    uint16_t packed_len = LoRa_Manager_Protocol_Pack(&s_TempPkt, s_FSM.pending_buf, sizeof(s_FSM.pending_buf), s_FSM_Config->tmode, s_FSM_Config->channel);
     if (packed_len == 0) return false;
     
-    memcpy(s_FSM.pending_buf, &pkt, sizeof(LoRa_Packet_t));
+    // 备份到 pending_buf 用于重传
+    memcpy(s_FSM.pending_buf, &s_TempPkt, sizeof(LoRa_Packet_t));
     s_FSM.pending_len = 1; 
 
-    return LoRa_Manager_Buffer_PushTx(&pkt, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
+    // 推入发送队列
+    return LoRa_Manager_Buffer_PushTx(&s_TempPkt, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
 }
+													 
 
 bool LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet) {
     if (packet->IsAckPacket) {

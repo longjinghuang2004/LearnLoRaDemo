@@ -48,93 +48,104 @@ static const char* _GetRateStr(uint8_t rate) {
 //                    2. 核心接口实现
 // ============================================================
 
-bool LoRa_Service_Command_Process(char *cmd_str) {
-    // 1. 获取当前配置 (用于比对 Token)
+bool LoRa_Service_Command_Process(char *cmd_str, char *out_resp, uint16_t max_len) {
     const LoRa_Config_t *cfg = LoRa_Service_Config_Get();
     
-    // 2. 格式检查: CMD
+    // 1. 格式检查: CMD
     char *prefix = strtok(cmd_str, ":"); 
     if (prefix == NULL || strcmp(prefix, "CMD") != 0) return false;
     
-    // 3. [安全核心] 提取并校验 Token
+    // 2. Token 校验
     char *token_str = strtok(NULL, ":");
-    if (token_str == NULL) {
-        LORA_LOG("[SEC] Missing Token in Command!\r\n");
-        return false;
-    }
+    if (token_str == NULL) return false;
     
-    // 使用 strtoul 解析 hex 字符串
     uint32_t input_token = (uint32_t)strtoul(token_str, NULL, 16);
     if (input_token != cfg->token) {
-        LORA_LOG("[SEC] Token Mismatch! Expect %08X, Got %08X\r\n", cfg->token, input_token);
-        return false; // 鉴权失败，拒绝执行
+        LORA_LOG("[SEC] Token Mismatch!\r\n");
+        return false; 
     }
 
-    // 4. 提取具体指令与参数
+    // 3. 提取指令与参数
     char *cmd = strtok(NULL, "="); 
-    char *params = strtok(NULL, ""); // 获取剩余所有字符串作为参数
+    char *params = strtok(NULL, ""); // 获取剩余所有字符串
 
     if (cmd == NULL) return false;
 
-    LORA_LOG("[SVC] Auth OK. Executing: %s\r\n", cmd);
+    LORA_LOG("[SVC] Executing: %s\r\n", cmd);
     
-    // 准备修改配置
-    LoRa_Config_t new_cfg = *cfg;
-    bool cfg_changed = false;
-
-    // --- 指令处理逻辑 ---
-
-    // INFO
+    // --- INFO 指令 ---
     if (strcmp(cmd, "INFO") == 0) {
-        LORA_LOG("=== LoRa Configuration ===\r\n");
-        LORA_LOG("  UUID:    %08X\r\n", new_cfg.uuid);
-        LORA_LOG("  NetID:   %d\r\n", new_cfg.net_id);
-        LORA_LOG("  Group:   %d\r\n", new_cfg.group_id);
-        LORA_LOG("  Token:   %08X\r\n", new_cfg.token);
-        LORA_LOG("  Chan:    %d\r\n", new_cfg.channel);
-        // [修复] 这里调用了辅助函数，消除了 Warning #177
-        LORA_LOG("  Power:   %s\r\n", _GetPowerStr(new_cfg.power));
-        LORA_LOG("  Rate:    %s\r\n", _GetRateStr(new_cfg.air_rate));
-        LORA_LOG("==========================\r\n");
+        // [修改] 使用辅助函数 _GetRateStr 和 _GetPowerStr 消除编译警告，并提供更友好的信息
+        snprintf(out_resp, max_len, "ID:%d,CH:%d,RATE:%s,PWR:%s", 
+                 cfg->net_id, 
+                 cfg->channel, 
+                 _GetRateStr(cfg->air_rate), 
+                 _GetPowerStr(cfg->power));
         return true;
     }
     
-    // BIND (格式: BIND=UUID,NetID)
-    else if (strcmp(cmd, "BIND") == 0 && params != NULL) {
-        uint32_t target_uuid;
-        uint16_t new_net_id;
+    // --- CFG 指令 (核心 OTA 逻辑) ---
+    // 格式: CMD:TOKEN:CFG=CH:23,PWR:1,RATE:5
+    else if (strcmp(cmd, "CFG") == 0 && params != NULL) {
+        LoRa_Config_t new_cfg = *cfg;
+        bool changed = false;
         
-        // [修改] 使用 SCNx32 和 SCNu32 宏
-        int parsed = sscanf(params, "%" SCNx32 ",%hu", &target_uuid, &new_net_id);
-        if (parsed != 2) parsed = sscanf(params, "%" SCNu32 ",%hu", &target_uuid, &new_net_id);
-        
-        if (parsed == 2) {
-            if (target_uuid == new_cfg.uuid) {
-                new_cfg.net_id = new_net_id;
-                cfg_changed = true;
-                LoRa_Service_NotifyEvent(LORA_EVENT_BIND_SUCCESS, &new_net_id);
-            } else {
-                LORA_LOG("[CMD] UUID Mismatch for BIND.\r\n");
+        // 使用逗号分隔多个参数
+        char *pair = strtok(params, ",");
+        while (pair != NULL) {
+            // 解析 Key:Value
+            char *key = pair;
+            char *val_str = strchr(pair, ':');
+            if (val_str) {
+                *val_str = '\0'; // 切断 Key
+                val_str++;       // 指向 Value
+                int val = atoi(val_str);
+                
+                if (strcmp(key, "CH") == 0) {
+                    new_cfg.channel = (uint8_t)val;
+                    changed = true;
+                } else if (strcmp(key, "PWR") == 0) {
+                    new_cfg.power = (uint8_t)val;
+                    changed = true;
+                } else if (strcmp(key, "RATE") == 0) {
+                    new_cfg.air_rate = (uint8_t)val;
+                    changed = true;
+                } else if (strcmp(key, "NET") == 0) {
+                    new_cfg.net_id = (uint16_t)val;
+                    changed = true;
+                } else if (strcmp(key, "GRP") == 0) {
+                    new_cfg.group_id = (uint16_t)val;
+                    changed = true;
+                } else if (strcmp(key, "ADDR") == 0) {
+                    new_cfg.hw_addr = (uint16_t)val;
+                    changed = true;
+                }
             }
+            pair = strtok(NULL, ",");
+        }
+        
+        if (changed) {
+            // 1. 更新内存副本
+            LoRa_Service_Config_Set(&new_cfg);
+            
+            // 2. [新增] 通知 Service 层保存到 Flash
+            LoRa_Service_NotifyEvent(LORA_EVENT_CONFIG_COMMIT, (void*)&new_cfg);
+            
+            // 3. 通知 Service 层准备重启
+            LoRa_Service_NotifyEvent(LORA_EVENT_REBOOT_REQ, NULL);
+            
+            snprintf(out_resp, max_len, "OK, Re-init in %dms", LORA_REBOOT_DELAY_MS);
+            return true;
+        } else {
+            snprintf(out_resp, max_len, "ERR: No Change");
+            return true;
         }
     }
     
-    // RST
+    // --- RST 指令 ---
     else if (strcmp(cmd, "RST") == 0) {
         LoRa_Service_NotifyEvent(LORA_EVENT_REBOOT_REQ, NULL);
-        return true;
-    }
-    
-    // FACTORY
-    else if (strcmp(cmd, "FACTORY") == 0) {
-        LoRa_Service_FactoryReset();
-        return true;
-    }
-    
-    // 应用变更
-    if (cfg_changed) {
-        LoRa_Service_Config_Set(&new_cfg);
-        LoRa_Service_NotifyEvent(LORA_EVENT_CONFIG_COMMIT, NULL);
+        snprintf(out_resp, max_len, "OK, Rebooting...");
         return true;
     }
     

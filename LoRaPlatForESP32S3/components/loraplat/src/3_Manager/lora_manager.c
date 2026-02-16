@@ -105,23 +105,22 @@ void LoRa_Manager_Run(void) {
     _ProcessTxQueue();
 }
 
-// [修改] 增加 opt 参数
 bool LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt) {
     // 1. 加密处理
-    uint8_t final_payload[LORA_MAX_PAYLOAD_LEN];
+    // [优化] 将栈变量改为静态变量 (200 字节)
+    static uint8_t s_FinalPayload[LORA_MAX_PAYLOAD_LEN];
     uint16_t final_len = len;
     
     if (len > LORA_MAX_PAYLOAD_LEN) return false;
 
     if (s_Cipher && s_Cipher->Encrypt) {
-        final_len = s_Cipher->Encrypt(payload, len, final_payload);
+        final_len = s_Cipher->Encrypt(payload, len, s_FinalPayload);
         if (final_len > LORA_MAX_PAYLOAD_LEN) return false; 
     } else {
-        memcpy(final_payload, payload, len);
+        memcpy(s_FinalPayload, payload, len);
     }
 
     // 2. 尝试入队
-    // 临界区保护
     uint32_t ctx = OSAL_EnterCritical();
     
     if (s_TxQ_Count >= TX_PACKET_QUEUE_SIZE) {
@@ -131,17 +130,17 @@ bool LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id,
     }
     
     TxRequest_t *req = &s_TxQueue[s_TxQ_Head];
-    memcpy(req->payload, final_payload, final_len);
+    memcpy(req->payload, s_FinalPayload, final_len); // 使用静态 buffer
     req->len = final_len;
     req->target_id = target_id;
-    req->opt = opt; // [新增] 保存选项
+    req->opt = opt; 
     
     s_TxQ_Head = (s_TxQ_Head + 1) % TX_PACKET_QUEUE_SIZE;
     s_TxQ_Count++;
     
     OSAL_ExitCritical(ctx);
     
-    // 3. 尝试立即触发一次 (如果 FSM 刚好空闲)
+    // 3. 尝试立即触发一次
     _ProcessTxQueue();
     
     return true;

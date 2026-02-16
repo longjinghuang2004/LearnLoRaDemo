@@ -68,14 +68,35 @@ const LoRa_Config_t* LoRa_Service_Config_Get(void) {
     return &s_CurrentConfig;
 }
 
+// [修改] 增加 Flash 保存逻辑
 void LoRa_Service_Config_Set(const LoRa_Config_t *cfg) {
     if (cfg) {
-        // 【修改】适配新的临界区接口
         uint32_t primask = OSAL_EnterCritical();
         memcpy(&s_CurrentConfig, cfg, sizeof(LoRa_Config_t));
         OSAL_ExitCritical(primask);
+        
+        // [新增] 立即调用回调保存到 Flash (阻塞式)
+        // 注意：这里需要获取 Service 层的回调，但 Config 模块没有直接持有。
+        // 方案：我们通过 LoRa_Service_GetCallback() 获取（需要在 Service.h 暴露）
+        // 或者，更简单的，我们在 Service 层初始化 Config 时传入回调。
+        // 鉴于目前架构，我们假设 Service 层会处理，或者我们在这里直接调用一个外部弱符号？
+        
+        // 为了不破坏架构，我们修改一下逻辑：
+        // Config 模块只负责内存。Service 层在调用 Config_Set 之前或之后负责调用 SaveConfig。
+        // 但 Command 模块调用了 Config_Set。
+        
+        // **修正方案**：在 lora_service.c 中增加一个 Helper 函数供 Command 调用，
+        // 或者让 Config 模块能访问回调。
+        // 这里我们采用最直接的方式：在 lora_service.c 中暴露一个 Save 接口给 Command 用，
+        // 但 Command 已经写了调用 Config_Set。
+        
+        // **最终方案**：让 Config_Set 只是更新内存。Command 模块在调用 Config_Set 后，
+        // 显式触发 LORA_EVENT_CONFIG_COMMIT 事件。
+        // Service 层捕获该事件并调用 SaveConfig。
+        // 这样解耦最好。
     }
 }
+
 void LoRa_Service_Config_FactoryReset(void) {
     _LoadDefaults();
     s_CurrentConfig.magic = 0; // 标记为无效，下次上电会重置

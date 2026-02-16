@@ -4,12 +4,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_system.h" // for esp_restart
 #include "nvs_flash.h"
 #include "driver/uart.h"
 
 // 引入组件头文件
 #include "bsp_led.h"
-// #include "KeyManager.h" // 如果没用到可以注释掉
+// #include "KeyManager.h" 
 // #include "Key.h"
 
 // 引入 LoRaPlat
@@ -21,7 +22,7 @@ static const char *TAG = "MAIN";
 
 // --- 引脚定义 ---
 #define PIN_WS2812      48
-#define PIN_BUTTON      21
+#define PIN_BUTTON      0  // Boot键通常是GPIO0
 
 // --- 声明外部初始化函数 ---
 extern void LoRa_OSAL_Init_ESP32(void);
@@ -36,10 +37,14 @@ static void App_SaveConfig(const LoRa_Config_t *cfg) {
     nvs_handle_t my_handle;
     esp_err_t err;
     err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &my_handle);
-    if (err != ESP_OK) return;
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS Open Failed");
+        return;
+    }
     nvs_set_blob(my_handle, NVS_KEY_CFG, cfg, sizeof(LoRa_Config_t));
     nvs_commit(my_handle);
     nvs_close(my_handle);
+    ESP_LOGI(TAG, "Config Saved to NVS");
 }
 
 static void App_LoadConfig(LoRa_Config_t *cfg) {
@@ -49,13 +54,21 @@ static void App_LoadConfig(LoRa_Config_t *cfg) {
     if (err == ESP_OK) {
         size_t required_size = sizeof(LoRa_Config_t);
         nvs_get_blob(my_handle, NVS_KEY_CFG, cfg, &required_size);
-        ESP_LOGI(TAG, "Config loaded from NVS.");
+        ESP_LOGI(TAG, "Config Loaded from NVS");
+    } else {
+        ESP_LOGW(TAG, "NVS Empty, using defaults");
     }
     nvs_close(my_handle);
 }
 
+// [新增] 系统复位适配
+static void App_SystemReset(void) {
+    ESP_LOGW(TAG, "System Restarting...");
+    esp_restart();
+}
+
 // ============================================================
-//                    1. LoRa 回调逻辑 (核心修改区)
+//                    1. LoRa 回调逻辑
 // ============================================================
 
 static void App_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta) {
@@ -81,10 +94,8 @@ static void App_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, L
         BSP_LED_SetColor(0, 0, 0);
     }
 
-    // 3. [关键修改] 全量回传 (Echo)
-    // 使用 LORA_OPT_CONFIRMED，强制要求 STM32 收到回传后，给 ESP32 回一个 ACK
-    // 这样就构成了完整的四次握手：
-    // STM32->ESP32 (Data) | ESP32->STM32 (ACK) | ESP32->STM32 (Echo Data) | STM32->ESP32 (ACK)
+    // 3. 全量回传 (Echo)
+    // 使用 LORA_OPT_CONFIRMED，确保 STM32 知道我们收到了
     bool res = LoRa_Service_Send(data, len, src_id, LORA_OPT_CONFIRMED);
     
     if (res) {
@@ -97,23 +108,25 @@ static void App_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, L
 static void App_OnEvent(LoRa_Event_t event, void *arg) {
     switch(event) {
         case LORA_EVENT_INIT_SUCCESS: 
-            ESP_LOGI(TAG, "LoRa Init Success!"); 
+            ESP_LOGI(TAG, "LoRa Stack Ready (Soft Reboot Done)."); 
             BSP_LED_SetColor(0, 20, 0);
             vTaskDelay(pdMS_TO_TICKS(500));
             BSP_LED_SetColor(0, 0, 0);
             break;
+            
         case LORA_EVENT_TX_FINISHED:
-            ESP_LOGD(TAG, "TX Finished (ACK OK)"); // 收到 STM32 对 Echo 的 ACK
+            ESP_LOGD(TAG, "TX Finished (ACK OK)"); 
             break;
+            
         case LORA_EVENT_TX_FAILED:
             ESP_LOGW(TAG, "TX Failed (Timeout)");
             break;
-        case LORA_EVENT_BIND_SUCCESS:
-            ESP_LOGI(TAG, "Bind Success! New NetID: %d", *(uint16_t*)arg);
-            break;
+            
         case LORA_EVENT_CONFIG_COMMIT:
-            ESP_LOGI(TAG, "Config Saved to Flash.");
+            // Service 层已经调用了 SaveConfig，这里只是日志通知
+            ESP_LOGI(TAG, "Config Commit Event Triggered.");
             break;
+            
         default: break;
     }
 }
@@ -121,8 +134,8 @@ static void App_OnEvent(LoRa_Event_t event, void *arg) {
 static const LoRa_Callback_t s_LoRaCb = {
     .SaveConfig = App_SaveConfig,
     .LoadConfig = App_LoadConfig,
-    .GetRandomSeed = NULL,
-    .SystemReset = NULL,
+    .GetRandomSeed = NULL, // ESP32 Port层已实现硬件随机数，此处可留空
+    .SystemReset = App_SystemReset, // [新增] 绑定复位接口
     .OnRecvData = App_OnRecvData,
     .OnEvent = App_OnEvent
 };
@@ -143,7 +156,10 @@ void lora_task_entry(void *arg) {
 // --- PC 串口控制台任务 ---
 void console_task_entry(void *arg) {
     char line[128];
+    char resp_buf[128]; // [新增] 用于接收 CMD 执行结果
+
     printf("\n=== ESP32 LoRaPlat Shell ===\n");
+    printf("Type 'CMD:00000000:INFO' to check status\n");
 
     while (1) {
         if (fgets(line, sizeof(line), stdin) != NULL) {
@@ -155,16 +171,19 @@ void console_task_entry(void *arg) {
             if (strlen(line) > 0) {
                 printf("[Shell] Input: %s\n", line);
 
+                // 1. 本地指令处理
                 if (strncmp(line, "CMD:", 4) == 0) {
-                    if (LoRa_Service_Command_Process(line)) {
-                        printf(" -> Command Executed OK.\n");
+                    // [修改] 适配新的 Command 接口
+                    if (LoRa_Service_Command_Process(line, resp_buf, sizeof(resp_buf))) {
+                        printf(" -> CMD Result: %s\n", resp_buf);
                     } else {
-                        printf(" -> Command Failed.\n");
+                        printf(" -> CMD Failed (Auth Error or Format)\n");
                     }
                 }
+                // 2. 普通数据发送
                 else {
                     printf(" -> Sending to STM32 (ID:1)...\n");
-                    // 主动发送也使用 Confirmed
+                    // [修改] 增加 LORA_OPT_CONFIRMED
                     LoRa_Service_Send((uint8_t*)line, strlen(line), 0x0001, LORA_OPT_CONFIRMED);
                 }
             }
@@ -178,6 +197,7 @@ void console_task_entry(void *arg) {
 // ============================================================
 void app_main(void)
 {
+    // NVS 初始化 (ESP32 必须)
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -188,7 +208,10 @@ void app_main(void)
     BSP_LED_Init(PIN_WS2812);
     
     LoRa_OSAL_Init_ESP32();
-    LoRa_Service_Init(&s_LoRaCb, 0x0002); // ESP32 ID = 2
+    
+    // 初始化协议栈 (ESP32 ID = 2)
+    // 内部会自动调用 LoadConfig 和 Driver_Init
+    LoRa_Service_Init(&s_LoRaCb, 0x0002); 
 
     xTaskCreate(lora_task_entry, "lora_task", 4096, NULL, 5, NULL);
     xTaskCreate(console_task_entry, "console_task", 4096, NULL, 3, NULL);
