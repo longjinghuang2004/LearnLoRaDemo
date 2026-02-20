@@ -2,9 +2,10 @@
 #include "lora_driver.h"
 #include "lora_service.h"
 #include "lora_osal.h"
+#include "LoRaPlatConfig.h"
 
 // 异常忙状态阈值 (10秒)
-#define LORA_MONITOR_BUSY_THRESHOLD_MS  10000
+//#define LORA_MONITOR_BUSY_THRESHOLD_MS  10000，已移动至LoRaPlatConfig.h进行管理
 
 static uint32_t s_BusyStartTime = 0;
 

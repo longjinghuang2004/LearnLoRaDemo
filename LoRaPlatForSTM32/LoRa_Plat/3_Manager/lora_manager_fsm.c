@@ -6,6 +6,7 @@
   ******************************************************************************
   */
 
+#include "LoRaPlatConfig.h"
 #include "lora_manager_fsm.h"
 #include "lora_manager_buffer.h"
 #include "lora_port.h"
@@ -13,7 +14,7 @@
 #include <string.h>
 
 
-#define LORA_DEDUP_TTL_MS  5000  // 去重记录有效期 (5秒)
+//#define LORA_DEDUP_TTL_MS  5000  // 去重记录有效期 (5秒)，已移动至LoRaPlatConfig.h进行管理
 
 // ============================================================
 //                    1. 内部数据结构
