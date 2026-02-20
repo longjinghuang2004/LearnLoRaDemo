@@ -6,6 +6,7 @@
   ******************************************************************************
   */
 
+#include "LoRaPlatConfig.h"
 #include "lora_manager_fsm.h"
 #include "lora_manager_buffer.h"
 #include "lora_port.h"
@@ -13,7 +14,7 @@
 #include <string.h>
 
 
-#define LORA_DEDUP_TTL_MS  5000  // 去重记录有效期 (5秒)
+//#define LORA_DEDUP_TTL_MS  5000  // 去重记录有效期 (5秒)，已移动至LoRaPlatConfig.h进行管理
 
 // ============================================================
 //                    1. 内部数据结构
@@ -172,6 +173,8 @@ static bool _FSM_CheckDuplicate(uint16_t src_id, uint16_t seq) {
     return false; // 新包
 }
 
+
+
 // ============================================================
 //                    3. 状态处理函数 (State Handlers)
 // ============================================================
@@ -210,6 +213,65 @@ static bool _FSM_Action_PhyTxScheduler(uint8_t *scratch_buf, uint16_t scratch_le
         }
     }
     return false;
+}
+
+
+/**
+ * @brief 处理 ACK 等待超时逻辑 (重传策略核心)
+ * @return true=状态已变更(重传或失败), false=无动作(物理层忙)
+ */
+static bool _FSM_HandleAckTimeout(uint8_t *scratch_buf, uint16_t scratch_len, LoRa_FSM_Output_t *output) {
+    // 1. 检查重传次数是否耗尽
+    if (s_FSM.retry_count >= LORA_MAX_RETRY) {
+        LORA_LOG("[MGR] ACK Failed (Max Retry)\r\n");
+        output->Event = FSM_EVT_TX_TIMEOUT;
+        output->MsgID = s_FSM.current_tx_id;
+        _FSM_Reset();
+        return true;
+    }
+
+    // 2. 执行重传准备
+    s_FSM.retry_count++;
+
+    // [策略] 线性退避 + 随机抖动
+    // Base: 1500ms, Step: 500ms, Jitter: 0~500ms
+    // Retry 1: 2000~2500ms
+    // Retry 2: 2500~3000ms
+    // Retry 3: 3000~3500ms
+    uint32_t step_add = s_FSM.retry_count * 500;
+    
+    // [关键] 这里暂时调用 Port 层，稍后讨论架构问题
+    uint32_t jitter = LoRa_Port_GetEntropy32() % 501; 
+    
+    uint32_t next_timeout = LORA_RETRY_INTERVAL_MS + step_add + jitter;
+
+    LORA_LOG("[MGR] ACK Timeout, Retry %d/%d (Next: %dms)\r\n", 
+             s_FSM.retry_count, LORA_MAX_RETRY, next_timeout);
+
+    // 3. 重新入队
+    if (s_FSM.pending_len > 0) {
+        LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
+        LoRa_Manager_Buffer_PushTx(pending, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
+        
+        // 4. 尝试立即调度
+        // 临时切换状态以允许调度器工作
+        LoRa_FSM_State_t backup_state = s_FSM.state;
+        s_FSM.state = LORA_FSM_IDLE;
+        
+        if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, NULL)) {
+            // 发送成功，设置下一次超时
+            _FSM_SetState(LORA_FSM_WAIT_ACK, next_timeout);
+            return true;
+        } else {
+            // 物理层忙，恢复状态，下个循环再试
+            s_FSM.state = backup_state; 
+            return false;
+        }
+    } else {
+        // 异常：Pending Buffer 为空
+        _FSM_Reset();
+        return true;
+    }
 }
 
 // ============================================================
@@ -410,39 +472,7 @@ LoRa_FSM_Output_t LoRa_Manager_FSM_Run(uint8_t *scratch_buf, uint16_t scratch_le
         // --------------------------------------------------------
         case LORA_FSM_WAIT_ACK: {
             if (is_timeout) {
-                if (s_FSM.retry_count < LORA_MAX_RETRY) {
-                    // [重传逻辑]
-                    s_FSM.retry_count++;
-                    LORA_LOG("[MGR] ACK Timeout, Retry %d/%d\r\n", s_FSM.retry_count, LORA_MAX_RETRY);
-                    
-                    if (s_FSM.pending_len > 0) {
-                        // 重新入队并尝试立即发送
-                        LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
-                        LoRa_Manager_Buffer_PushTx(pending, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
-                        
-                        // 尝试立即调度物理层发送
-                        // 临时切换状态以允许调度器工作
-                        LoRa_FSM_State_t backup_state = s_FSM.state;
-                        s_FSM.state = LORA_FSM_IDLE;
-                        
-                        if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, NULL)) {
-                            // 发送成功，重置超时定时器
-                            _FSM_SetState(LORA_FSM_WAIT_ACK, LORA_RETRY_INTERVAL_MS);
-                        } else {
-                            // 发送失败（物理层忙），恢复状态，下个循环再试
-                            s_FSM.state = backup_state; 
-                        }
-                    } else {
-                        // 异常：Pending Buffer 为空，无法重传
-                        _FSM_Reset();
-                    }
-                } else {
-                    // [失败逻辑] 重传次数耗尽
-                    LORA_LOG("[MGR] ACK Failed (Max Retry)\r\n");
-                    output.Event = FSM_EVT_TX_TIMEOUT;
-                    output.MsgID = s_FSM.current_tx_id;
-                    _FSM_Reset();
-                }
+                _FSM_HandleAckTimeout(scratch_buf, scratch_len, &output);
             }
             break;
         }
