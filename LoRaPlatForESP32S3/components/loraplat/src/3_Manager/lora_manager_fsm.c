@@ -1,22 +1,31 @@
+/**
+  ******************************************************************************
+  * @file    lora_manager_fsm.c
+  * @author  LoRaPlat Team
+  * @brief   LoRa 协议状态机实现 (V3.4.1 Fixes)
+  ******************************************************************************
+  */
+
 #include "lora_manager_fsm.h"
 #include "lora_manager_buffer.h"
 #include "lora_port.h"
 #include "lora_osal.h"
-#include "lora_manager.h" 
-#include "lora_service.h" // [新增] 用于 NotifyEvent
-
 #include <string.h>
 
+
+#define LORA_DEDUP_TTL_MS  5000  // 去重记录有效期 (5秒)
+
 // ============================================================
-//                    1. 内部状态定义
+//                    1. 内部数据结构
 // ============================================================
 
 static const LoRa_Config_t *s_FSM_Config = NULL;
 
+
 // 去重表条目
 typedef struct {
     uint16_t src_id;
-    uint8_t  seq;
+    uint16_t  seq;
     uint32_t last_seen; 
     bool     valid;
 } DeDupEntry_t;
@@ -27,7 +36,7 @@ typedef struct {
     uint8_t          retry_count;
     uint8_t          tx_seq; 
     
-    // [新增] 当前正在处理的消息 ID
+    // 当前正在处理的消息 ID
     LoRa_MsgID_t     current_tx_id;
     
     // --- 重传/广播上下文 ---
@@ -38,7 +47,7 @@ typedef struct {
     struct {
         bool     pending;
         uint16_t target_id;
-        uint8_t  seq;
+        uint16_t  seq;
     } ack_ctx;
     
     // --- 接收去重表 ---
@@ -48,9 +57,18 @@ typedef struct {
 
 static FSM_Context_t s_FSM;
 
+// 内部事件队列 (用于跨函数传递事件)
+static LoRa_FSM_Output_t s_PendingOutput = { .Event = FSM_EVT_NONE, .MsgID = 0 };
+
 // ============================================================
 //                    2. 内部辅助函数 (Actions)
 // ============================================================
+
+// 辅助：设置待处理事件
+static void _SetPendingEvent(LoRa_FSM_EventType_t evt, LoRa_MsgID_t id) {
+    s_PendingOutput.Event = evt;
+    s_PendingOutput.MsgID = id;
+}
 
 static void _FSM_SetState(LoRa_FSM_State_t new_state, uint32_t timeout_ms) {
     s_FSM.state = new_state;
@@ -66,7 +84,7 @@ static void _FSM_Reset(void) {
     s_FSM.ack_ctx.pending = false;
     s_FSM.retry_count = 0;
     s_FSM.pending_len = 0; 
-    s_FSM.current_tx_id = 0; // 清除 ID
+    s_FSM.current_tx_id = 0; 
 }
 
 static void _FSM_SendAck(void) {
@@ -87,39 +105,71 @@ static void _FSM_SendAck(void) {
     s_FSM.ack_ctx.pending = false;
 }
 
-static bool _FSM_CheckDuplicate(uint16_t src_id, uint8_t seq) {
+/**
+ * @brief 内部静态去重检查 (带 TTL 机制)
+ * @param src_id 源设备 ID
+ * @param seq    数据包序号
+ * @return true=是重复包(丢弃), false=是新包(接受)
+ */
+static bool _FSM_CheckDuplicate(uint16_t src_id, uint16_t seq) {
     uint32_t now = OSAL_GetTick();
     int lru_idx = 0;
     uint32_t min_time = 0xFFFFFFFF;
+    bool found_empty_slot = false;
     
     for (int i = 0; i < LORA_DEDUP_MAX_COUNT; i++) {
+        // 1. 检查条目有效性与 TTL
         if (s_FSM.dedup_table[i].valid) {
+            // 计算时间差 (处理溢出)
+            uint32_t elapsed = now - s_FSM.dedup_table[i].last_seen;
+            
+            if (elapsed > LORA_DEDUP_TTL_MS) {
+                // 条目超时，标记失效
+                s_FSM.dedup_table[i].valid = false;
+                // 记录为空槽位 (如果还没找到其他空槽)
+                if (!found_empty_slot) {
+                    lru_idx = i;
+                    found_empty_slot = true;
+                }
+                continue; 
+            }
+
+            // 2. 匹配 SrcID
             if (s_FSM.dedup_table[i].src_id == src_id) {
+                // 匹配 Seq
                 if (s_FSM.dedup_table[i].seq == seq) {
-                    s_FSM.dedup_table[i].last_seen = now; 
+                    // 完全匹配 -> 重复包
+                    s_FSM.dedup_table[i].last_seen = now; // 刷新时间
                     return true; 
                 } else {
+                    // 同源新 Seq -> 更新记录
                     s_FSM.dedup_table[i].seq = seq;
                     s_FSM.dedup_table[i].last_seen = now;
-                    return false; 
+                    return false; // 新包
                 }
             }
-            if (s_FSM.dedup_table[i].last_seen < min_time) {
+            
+            // 3. 寻找 LRU (最久未使用的有效条目)
+            if (!found_empty_slot && s_FSM.dedup_table[i].last_seen < min_time) {
                 min_time = s_FSM.dedup_table[i].last_seen;
                 lru_idx = i;
             }
         } else {
-            lru_idx = i;
-            break; 
+            // 找到空槽
+            if (!found_empty_slot) {
+                lru_idx = i;
+                found_empty_slot = true;
+            }
         }
     }
     
+    // 4. 插入新记录 (覆盖 LRU 或 填充空槽)
     s_FSM.dedup_table[lru_idx].valid = true;
     s_FSM.dedup_table[lru_idx].src_id = src_id;
     s_FSM.dedup_table[lru_idx].seq = seq;
     s_FSM.dedup_table[lru_idx].last_seen = now;
     
-    return false; 
+    return false; // 新包
 }
 
 // ============================================================
@@ -129,6 +179,7 @@ static bool _FSM_CheckDuplicate(uint16_t src_id, uint8_t seq) {
 static bool _FSM_Action_PhyTxScheduler(uint8_t *scratch_buf, uint16_t scratch_len, bool *is_need_ack) {
     if (LoRa_Port_IsTxBusy()) return false;
     
+    // 优先处理 ACK 队列
     if (LoRa_Manager_Buffer_HasAckData()) {
         uint16_t len = LoRa_Manager_Buffer_PeekAck(scratch_buf, scratch_len);
         if (len > 0) {
@@ -139,6 +190,7 @@ static bool _FSM_Action_PhyTxScheduler(uint8_t *scratch_buf, uint16_t scratch_le
             }
         }
     }
+    // 处理普通数据队列
     else if (s_FSM.state == LORA_FSM_IDLE && LoRa_Manager_Buffer_HasTxData()) {
         uint16_t len = LoRa_Manager_Buffer_PeekTx(scratch_buf, scratch_len);
         if (len > 0) {
@@ -160,70 +212,6 @@ static bool _FSM_Action_PhyTxScheduler(uint8_t *scratch_buf, uint16_t scratch_le
     return false;
 }
 
-static void _FSM_State_AckDelay(uint32_t now) {
-    if ((int32_t)(s_FSM.timeout_deadline - now) <= 0) {
-        if (s_FSM.ack_ctx.pending) {
-            _FSM_SendAck(); 
-            LORA_LOG("[MGR] ACK Queued\r\n");
-        }
-        _FSM_SetState(LORA_FSM_IDLE, LORA_TIMEOUT_INFINITE);
-    }
-}
-
-static void _FSM_State_WaitAck(uint32_t now, uint8_t *scratch_buf, uint16_t scratch_len) {
-    if ((int32_t)(s_FSM.timeout_deadline - now) <= 0) {
-        if (s_FSM.retry_count < LORA_MAX_RETRY) {
-            s_FSM.retry_count++;
-            LORA_LOG("[MGR] ACK Timeout, Retry %d\r\n", s_FSM.retry_count);
-            
-            if (s_FSM.pending_len > 0) {
-                LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
-                LoRa_Manager_Buffer_PushTx(pending, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
-                
-                LoRa_FSM_State_t backup_state = s_FSM.state;
-                s_FSM.state = LORA_FSM_IDLE;
-                if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, NULL)) {
-                    _FSM_SetState(LORA_FSM_WAIT_ACK, LORA_RETRY_INTERVAL_MS);
-                } else {
-                    s_FSM.state = backup_state; 
-                }
-            } else {
-                _FSM_Reset();
-            }
-        } else {
-            LORA_LOG("[MGR] ACK Failed (Max Retry)\r\n");
-            // [新增] 触发失败事件
-            LoRa_Service_NotifyEvent(LORA_EVENT_TX_FAILED_ID, (void*)&s_FSM.current_tx_id);
-            _FSM_Reset();
-        }
-    }
-}
-
-static void _FSM_State_BroadcastRun(uint32_t now, uint8_t *scratch_buf, uint16_t scratch_len) {
-    if ((int32_t)(s_FSM.timeout_deadline - now) <= 0) {
-        if (s_FSM.retry_count < LORA_BROADCAST_REPEAT) {
-            s_FSM.retry_count++;
-            if (s_FSM.pending_len > 0) {
-                LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
-                LoRa_Manager_Buffer_PushTx(pending, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
-                
-                LoRa_FSM_State_t backup_state = s_FSM.state;
-                s_FSM.state = LORA_FSM_IDLE;
-                if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, NULL)) {
-                    _FSM_SetState(LORA_FSM_BROADCAST_RUN, LORA_BROADCAST_INTERVAL);
-                } else {
-                    s_FSM.state = backup_state;
-                }
-            }
-        } else {
-            // 广播结束
-            // [新增] 触发成功事件 (广播视为成功)
-            LoRa_Service_NotifyEvent(LORA_EVENT_TX_SUCCESS_ID, (void*)&s_FSM.current_tx_id);
-            _FSM_Reset();
-        }
-    }
-}
-
 // ============================================================
 //                    4. 核心接口实现
 // ============================================================
@@ -234,6 +222,7 @@ void LoRa_Manager_FSM_Init(const LoRa_Config_t *cfg) {
     _FSM_Reset();
     s_FSM.tx_seq = 0;
     memset(s_FSM.dedup_table, 0, sizeof(s_FSM.dedup_table));
+    s_PendingOutput.Event = FSM_EVT_NONE;
 }
 
 uint32_t LoRa_Manager_FSM_GetNextTimeout(void) {
@@ -248,7 +237,12 @@ uint32_t LoRa_Manager_FSM_GetNextTimeout(void) {
     }
 }
 
-// [修改] 增加 msg_id 参数
+// [修复] 实现了 IsBusy
+bool LoRa_Manager_FSM_IsBusy(void) {
+    // 只要状态不是 IDLE，或者有挂起的事件未处理，都视为忙
+    return (s_FSM.state != LORA_FSM_IDLE) || (s_PendingOutput.Event != FSM_EVT_NONE);
+}
+
 bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt,
                            LoRa_MsgID_t msg_id,
                            uint8_t *scratch_buf, uint16_t scratch_len) {
@@ -262,13 +256,7 @@ bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target
     memset(&s_TempPkt, 0, sizeof(s_TempPkt));
     
     s_TempPkt.IsAckPacket = false;
-    
-    if (target_id == 0xFFFF) {
-        s_TempPkt.NeedAck = false;
-    } else {
-        s_TempPkt.NeedAck = opt.NeedAck;
-    }
-    
+    s_TempPkt.NeedAck = (target_id == 0xFFFF) ? false : opt.NeedAck;
     s_TempPkt.HasCrc = LORA_ENABLE_CRC;
     s_TempPkt.TargetID = target_id;
     s_TempPkt.SourceID = s_FSM_Config->net_id;
@@ -283,7 +271,7 @@ bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target
     memcpy(s_FSM.pending_buf, &s_TempPkt, sizeof(LoRa_Packet_t));
     s_FSM.pending_len = 1; 
     
-    // [新增] 保存当前 ID
+    // 保存当前 ID
     s_FSM.current_tx_id = msg_id;
 
     return LoRa_Manager_Buffer_PushTx(&s_TempPkt, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
@@ -295,15 +283,20 @@ bool LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet) {
             LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
             if (packet->Sequence == pending->Sequence) {
                 LORA_LOG("[MGR] ACK Recv (Seq %d)\r\n", packet->Sequence);
-                // [新增] 触发成功事件
-                LoRa_Service_NotifyEvent(LORA_EVENT_TX_SUCCESS_ID, (void*)&s_FSM.current_tx_id);
-                _FSM_Reset(); 
+                
+                // [修复] 收到 ACK，设置挂起事件，通知 Manager 发送成功
+                // 注意：必须在 Reset 之前保存 ID，因为 Reset 会清空 ID
+                _SetPendingEvent(FSM_EVT_TX_DONE, s_FSM.current_tx_id);
+                
+                _FSM_Reset();
             }
         }
         return false; 
     } else {
+        // 数据包去重检查
         if (_FSM_CheckDuplicate(packet->SourceID, packet->Sequence)) {
             LORA_LOG("[MGR] Drop Duplicate\r\n");
+            // 即使是重复包，如果是需要 ACK 的，也得回 ACK (可能上一个 ACK 丢了)
             if (packet->NeedAck && packet->TargetID != 0xFFFF) {
                 s_FSM.ack_ctx.target_id = packet->SourceID;
                 s_FSM.ack_ctx.seq = packet->Sequence;
@@ -313,6 +306,7 @@ bool LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet) {
             return false; 
         }
         
+        // 新包
         if (packet->NeedAck && packet->TargetID != 0xFFFF) {
             s_FSM.ack_ctx.target_id = packet->SourceID;
             s_FSM.ack_ctx.seq = packet->Sequence;
@@ -323,50 +317,174 @@ bool LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet) {
     }
 }
 
-void LoRa_Manager_FSM_Run(uint8_t *scratch_buf, uint16_t scratch_len) {
+/**
+ * @brief  运行状态机 (周期调用)
+ * @param  scratch_buf: 共享工作区 (用于 TX 预览)
+ * @param  scratch_len: 工作区大小
+ * @return FSM 输出事件 (上层需根据此返回值触发回调)
+ */
+LoRa_FSM_Output_t LoRa_Manager_FSM_Run(uint8_t *scratch_buf, uint16_t scratch_len) {
+    // ============================================================
+    // 1. 输入采集 (Input Collection)
+    // ============================================================
+    LoRa_FSM_Output_t output = { .Event = FSM_EVT_NONE, .MsgID = 0 };
     uint32_t now = OSAL_GetTick();
     
-    if (s_FSM.state == LORA_FSM_IDLE) {
-        bool need_ack = false;
-        if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, &need_ack)) {
-            LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
-            
-            if (pending->TargetID == 0xFFFF) {
-                s_FSM.retry_count = 0;
-                LORA_LOG("[MGR] Broadcast Start\r\n");
-                _FSM_SetState(LORA_FSM_BROADCAST_RUN, LORA_BROADCAST_INTERVAL);
-            }
-            else if (need_ack) {
-                s_FSM.retry_count = 0;
-                LORA_LOG("[MGR] Wait ACK...\r\n");
-                _FSM_SetState(LORA_FSM_WAIT_ACK, LORA_ACK_TIMEOUT_MS);
-            }
-            else {
-                // [新增] 不需要 ACK 的单播，发完即成功
-                LoRa_Service_NotifyEvent(LORA_EVENT_TX_SUCCESS_ID, (void*)&s_FSM.current_tx_id);
-                _FSM_Reset();
-            }
+    // 计算是否超时
+    bool is_timeout = false;
+    if (s_FSM.timeout_deadline != LORA_TIMEOUT_INFINITE) {
+        // 使用 int32_t 强转处理 tick 溢出回绕问题
+        if ((int32_t)(s_FSM.timeout_deadline - now) <= 0) {
+            is_timeout = true;
         }
     }
-    
+
+    // ============================================================
+    // 2. 异步事件分发 (Async Event Dispatch)
+    // ============================================================
+    // 优先处理来自 ProcessRxPacket 的挂起事件 (例如收到 ACK 导致的 TX_DONE)
+    if (s_PendingOutput.Event != FSM_EVT_NONE) {
+        output = s_PendingOutput;
+        s_PendingOutput.Event = FSM_EVT_NONE; // 清除挂起标志
+        return output; // 立即返回，优先响应
+    }
+
+    // ============================================================
+    // 3. 状态机核心逻辑 (State Machine Core)
+    // ============================================================
     switch (s_FSM.state) {
-        case LORA_FSM_ACK_DELAY:
-            _FSM_State_AckDelay(now);
-            break;
+        
+        // --------------------------------------------------------
+        // 状态: 空闲 (IDLE)
+        // 任务: 检查发送队列，调度新任务
+        // --------------------------------------------------------
+        case LORA_FSM_IDLE: {
+            bool need_ack = false;
             
-        case LORA_FSM_WAIT_ACK:
-            _FSM_State_WaitAck(now, scratch_buf, scratch_len);
+            // 尝试从队列中提取并发送数据
+            if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, &need_ack)) {
+                // 获取刚刚发送的包信息（用于判断下一步状态）
+                LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
+                
+                if (pending->TargetID == LORA_ID_BROADCAST) {
+                    // [分支1] 广播模式：进入盲发状态
+                    s_FSM.retry_count = 0;
+                    _FSM_SetState(LORA_FSM_BROADCAST_RUN, LORA_BROADCAST_INTERVAL);
+                    LORA_LOG("[MGR] Broadcast Start\r\n");
+                }
+                else if (need_ack) {
+                    // [分支2] 可靠传输模式：进入等待 ACK 状态
+                    s_FSM.retry_count = 0;
+                    _FSM_SetState(LORA_FSM_WAIT_ACK, LORA_ACK_TIMEOUT_MS);
+                    LORA_LOG("[MGR] Wait ACK...\r\n");
+                }
+                else {
+                    // [分支3] 单播不可靠模式：发送即成功
+                    output.Event = FSM_EVT_TX_DONE;
+                    output.MsgID = s_FSM.current_tx_id;
+                    _FSM_Reset(); // 任务完成，重置状态
+                }
+            }
             break;
-            
-        case LORA_FSM_BROADCAST_RUN:
-            _FSM_State_BroadcastRun(now, scratch_buf, scratch_len);
+        }
+
+        // --------------------------------------------------------
+        // 状态: ACK 延时 (ACK_DELAY)
+        // 任务: 等待延时结束，发送 ACK 包
+        // --------------------------------------------------------
+        case LORA_FSM_ACK_DELAY: {
+            if (is_timeout) {
+                if (s_FSM.ack_ctx.pending) {
+                    _FSM_SendAck(); 
+                    LORA_LOG("[MGR] ACK Queued\r\n");
+                }
+                // 发送完 ACK 后回到空闲状态
+                _FSM_SetState(LORA_FSM_IDLE, LORA_TIMEOUT_INFINITE);
+            }
             break;
-            
+        }
+
+        // --------------------------------------------------------
+        // 状态: 等待 ACK (WAIT_ACK)
+        // 任务: 检查超时，执行重传或报错
+        // --------------------------------------------------------
+        case LORA_FSM_WAIT_ACK: {
+            if (is_timeout) {
+                if (s_FSM.retry_count < LORA_MAX_RETRY) {
+                    // [重传逻辑]
+                    s_FSM.retry_count++;
+                    LORA_LOG("[MGR] ACK Timeout, Retry %d/%d\r\n", s_FSM.retry_count, LORA_MAX_RETRY);
+                    
+                    if (s_FSM.pending_len > 0) {
+                        // 重新入队并尝试立即发送
+                        LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
+                        LoRa_Manager_Buffer_PushTx(pending, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
+                        
+                        // 尝试立即调度物理层发送
+                        // 临时切换状态以允许调度器工作
+                        LoRa_FSM_State_t backup_state = s_FSM.state;
+                        s_FSM.state = LORA_FSM_IDLE;
+                        
+                        if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, NULL)) {
+                            // 发送成功，重置超时定时器
+                            _FSM_SetState(LORA_FSM_WAIT_ACK, LORA_RETRY_INTERVAL_MS);
+                        } else {
+                            // 发送失败（物理层忙），恢复状态，下个循环再试
+                            s_FSM.state = backup_state; 
+                        }
+                    } else {
+                        // 异常：Pending Buffer 为空，无法重传
+                        _FSM_Reset();
+                    }
+                } else {
+                    // [失败逻辑] 重传次数耗尽
+                    LORA_LOG("[MGR] ACK Failed (Max Retry)\r\n");
+                    output.Event = FSM_EVT_TX_TIMEOUT;
+                    output.MsgID = s_FSM.current_tx_id;
+                    _FSM_Reset();
+                }
+            }
+            break;
+        }
+
+        // --------------------------------------------------------
+        // 状态: 广播盲发 (BROADCAST_RUN)
+        // 任务: 循环发送多次，提高送达率
+        // --------------------------------------------------------
+        case LORA_FSM_BROADCAST_RUN: {
+            if (is_timeout) {
+                if (s_FSM.retry_count < LORA_BROADCAST_REPEAT) {
+                    // [重发逻辑]
+                    s_FSM.retry_count++;
+                    if (s_FSM.pending_len > 0) {
+                        LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
+                        LoRa_Manager_Buffer_PushTx(pending, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
+                        
+                        // 尝试立即调度
+                        LoRa_FSM_State_t backup_state = s_FSM.state;
+                        s_FSM.state = LORA_FSM_IDLE;
+                        
+                        if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, NULL)) {
+                            // 发送成功，设置下一次间隔
+                            _FSM_SetState(LORA_FSM_BROADCAST_RUN, LORA_BROADCAST_INTERVAL);
+                        } else {
+                            s_FSM.state = backup_state;
+                        }
+                    }
+                } else {
+                    // [完成逻辑] 广播结束，视为成功
+                    output.Event = FSM_EVT_TX_DONE;
+                    output.MsgID = s_FSM.current_tx_id;
+                    _FSM_Reset();
+                }
+            }
+            break;
+        }
+
         default:
             break;
     }
+    
+    return output;
 }
 
-bool LoRa_Manager_FSM_IsBusy(void) {
-    return s_FSM.state != LORA_FSM_IDLE;
-}

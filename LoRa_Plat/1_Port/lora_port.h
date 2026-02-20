@@ -103,3 +103,24 @@ uint32_t LoRa_Port_GetEntropy32(void);
 void LoRa_Port_SyncAuxState(void);
 
 #endif // __LORA_PORT_H
+
+// ============================================================
+//                    6. 低功耗支持 (Low Power Support) [新增]
+// ============================================================
+
+/**
+ * @brief  [ISR调用] 通知 Port 层：硬件有动作（数据到达或状态变化）
+ * @note   该函数应在 UART_RXNE, UART_IDLE, AUX_EXTI 等中断中调用。
+ *         它会设置内部的“硬件事件挂起”标志。
+ */
+void LoRa_Port_NotifyHwEvent(void);
+
+/**
+ * @brief  [Service层调用] 检查并清除挂起的硬件事件
+ * @return true = 有未处理的硬件事件 (刚才发生了中断)
+ *         false = 无新事件
+ * @note   原子操作：读取标志位后立即清除。
+ */
+bool LoRa_Port_CheckAndClearHwEvent(void);
+
+

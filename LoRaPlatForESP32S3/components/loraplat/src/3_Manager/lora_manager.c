@@ -9,14 +9,14 @@
 // ============================================================
 
 #define RX_WORKSPACE_SIZE  MGR_RX_BUF_SIZE 
-// [优化] 移除 s_RxWorkspace，改用局部变量或直接解析 (此处暂保留，后续优化)
 static uint8_t s_RxWorkspace[RX_WORKSPACE_SIZE];
 
-static LoRa_OnRxData_t s_OnRx = NULL;
+// 保存回调结构体
+static LoRa_Manager_Callback_t s_MgrCb = { NULL, NULL };
+
 static const LoRa_Config_t *s_Mgr_Config = NULL;
 static const LoRa_Cipher_t *s_Cipher = NULL;
 
-// [新增] 全局消息 ID 计数器
 static LoRa_MsgID_t s_NextMsgID = 1;
 
 // 发送缓存队列
@@ -27,7 +27,7 @@ typedef struct {
     uint16_t len;
     uint16_t target_id;
     LoRa_SendOpt_t opt;
-    LoRa_MsgID_t msg_id; // [新增] 记录消息 ID
+    LoRa_MsgID_t msg_id; 
 } TxRequest_t;
 
 static TxRequest_t s_TxQueue[TX_PACKET_QUEUE_SIZE];
@@ -39,17 +39,24 @@ static uint8_t s_TxQ_Count = 0;
 //                    核心实现
 // ============================================================
 
-void LoRa_Manager_Init(const LoRa_Config_t *cfg, LoRa_OnRxData_t on_rx) {
+void LoRa_Manager_Init(const LoRa_Config_t *cfg, const LoRa_Manager_Callback_t *cb) {
     LORA_CHECK_VOID(cfg); 
     s_Mgr_Config = cfg;
-    s_OnRx = on_rx;
+    
+    if (cb) {
+        s_MgrCb = *cb; // 拷贝结构体内容
+    } else {
+        s_MgrCb.OnRecv = NULL;
+        s_MgrCb.OnTxResult = NULL;
+    }
+    
     s_Cipher = NULL;
     
     // 初始化队列
     s_TxQ_Head = 0;
     s_TxQ_Tail = 0;
     s_TxQ_Count = 0;
-    s_NextMsgID = 1; // 重置 ID
+    s_NextMsgID = 1; 
     
     LoRa_Manager_Buffer_Init();
     LoRa_Manager_FSM_Init(cfg); 
@@ -59,23 +66,15 @@ void LoRa_Manager_RegisterCipher(const LoRa_Cipher_t *cipher) {
     s_Cipher = cipher;
 }
 
-// [修改] 尝试从队列中取出并发送
 static void _ProcessTxQueue(void) {
-    // 1. 如果 FSM 忙，不能发送，直接退出
     if (LoRa_Manager_FSM_IsBusy()) return;
-    
-    // 2. 如果队列空，退出
     if (s_TxQ_Count == 0) return;
     
-    // 3. 取出队首
     TxRequest_t *req = &s_TxQueue[s_TxQ_Tail];
     
-    // 4. 尝试发送给 FSM
-    // [修改] 传递 msg_id
     uint8_t tx_stack_buf[LORA_MAX_PAYLOAD_LEN + 32];
     
     if (LoRa_Manager_FSM_Send(req->payload, req->len, req->target_id, req->opt, req->msg_id, tx_stack_buf, sizeof(tx_stack_buf))) {
-        // 发送成功，移动 Tail
         s_TxQ_Tail = (s_TxQ_Tail + 1) % TX_PACKET_QUEUE_SIZE;
         s_TxQ_Count--;
         LORA_LOG("[MGR] Dequeue TX (ID:%d, Left:%d)\r\n", req->msg_id, s_TxQ_Count);
@@ -88,36 +87,51 @@ void LoRa_Manager_Run(void) {
     
     // 2. 解析数据包
     LoRa_Packet_t pkt;
-    // [优化] 将 pkt 改为 static 避免栈溢出 (单线程安全)
-    // static LoRa_Packet_t s_RxPkt; 
-    // memset(&s_RxPkt, 0, sizeof(s_RxPkt));
-    // 这里暂时保持原样，因为 pkt 较小且在栈顶
     memset(&pkt, 0, sizeof(pkt));
     
     if (s_Mgr_Config && LoRa_Manager_Buffer_GetRxPacket(&pkt, s_Mgr_Config->net_id, s_Mgr_Config->group_id, 
                                         s_RxWorkspace, RX_WORKSPACE_SIZE)) {
         
+        // 调用 FSM 处理 (去重、ACK识别)
         bool valid_new_packet = LoRa_Manager_FSM_ProcessRxPacket(&pkt);
         
-        if (valid_new_packet && s_OnRx) {
+        // 如果是有效新包，回调上层
+        if (valid_new_packet && s_MgrCb.OnRecv) {
             if (s_Cipher && s_Cipher->Decrypt && pkt.PayloadLen > 0) {
                 uint16_t new_len = s_Cipher->Decrypt(pkt.Payload, pkt.PayloadLen, pkt.Payload);
                 pkt.PayloadLen = new_len;
             }
-            s_OnRx(pkt.Payload, pkt.PayloadLen, pkt.SourceID);
+            s_MgrCb.OnRecv(pkt.Payload, pkt.PayloadLen, pkt.SourceID);
         }
     }
     
-    // 3. 运行状态机
-    LoRa_Manager_FSM_Run(s_RxWorkspace, RX_WORKSPACE_SIZE);
+    // 3. 运行状态机并处理事件
+    LoRa_FSM_Output_t fsm_out = LoRa_Manager_FSM_Run(s_RxWorkspace, RX_WORKSPACE_SIZE);
+    
+    if (fsm_out.Event != FSM_EVT_NONE) {
+        switch (fsm_out.Event) {
+            case FSM_EVT_TX_DONE:
+                if (s_MgrCb.OnTxResult) {
+                    s_MgrCb.OnTxResult(fsm_out.MsgID, true);
+                }
+                break;
+                
+            case FSM_EVT_TX_TIMEOUT:
+                if (s_MgrCb.OnTxResult) {
+                    s_MgrCb.OnTxResult(fsm_out.MsgID, false);
+                }
+                break;
+                
+            default:
+                break;
+        }
+    }
     
     // 4. 处理发送队列
     _ProcessTxQueue();
 }
 
-// [修改] 返回 MsgID
 LoRa_MsgID_t LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt) {
-    // 1. 加密处理
     static uint8_t s_FinalPayload[LORA_MAX_PAYLOAD_LEN];
     uint16_t final_len = len;
     
@@ -130,7 +144,6 @@ LoRa_MsgID_t LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t ta
         memcpy(s_FinalPayload, payload, len);
     }
 
-    // 2. 尝试入队
     uint32_t ctx = OSAL_EnterCritical();
     
     if (s_TxQ_Count >= TX_PACKET_QUEUE_SIZE) {
@@ -145,9 +158,8 @@ LoRa_MsgID_t LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t ta
     req->target_id = target_id;
     req->opt = opt; 
     
-    // [新增] 生成 ID
     req->msg_id = s_NextMsgID++;
-    if (s_NextMsgID == 0) s_NextMsgID = 1; // 跳过 0
+    if (s_NextMsgID == 0) s_NextMsgID = 1; 
     
     LoRa_MsgID_t ret_id = req->msg_id;
     
@@ -156,19 +168,16 @@ LoRa_MsgID_t LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t ta
     
     OSAL_ExitCritical(ctx);
     
-    // 3. 尝试立即触发一次
     _ProcessTxQueue();
     
     return ret_id;
 }
 
 bool LoRa_Manager_IsBusy(void) {
-    // 如果队列里有数据，也算忙
     return LoRa_Manager_FSM_IsBusy() || (s_TxQ_Count > 0);
 }
 
 uint32_t LoRa_Manager_GetSleepDuration(void) {
-    // 如果队列有数据，不能休眠
     if (s_TxQ_Count > 0) return 0;
     return LoRa_Manager_FSM_GetNextTimeout();
 }

@@ -171,6 +171,17 @@ bool LoRa_Service_IsBusy(void);
  */
 void LoRa_Service_RegisterCipher(const LoRa_Cipher_t *cipher);
 
+
+/**
+ * @brief  [主循环调用] 检查系统是否可以进入休眠
+ * @return true = 可以休眠 (业务空闲且无硬件中断挂起)
+ *         false = 不可休眠 (忙碌或有新事件)
+ * @note   该函数会聚合 Manager、Driver 和 Port 的状态。
+ *         如果返回 true，主循环可以安全调用 __WFI()。
+ */
+bool LoRa_Service_CanSleep(void);
+
+
 // --- 配置访问 ---
 const LoRa_Config_t* LoRa_Service_GetConfig(void);
 void LoRa_Service_SetConfig(const LoRa_Config_t *cfg);

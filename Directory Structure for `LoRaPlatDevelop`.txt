@@ -4,22 +4,18 @@
 - LoRaPlatDevelop/
     - LoRaPlatForESP32S3/
         - components/
-            - bsp_button/
-                - CMakeLists.txt
-            - bsp_led/
-                - CMakeLists.txt
             - loraplat/
                 - src/
                     - 0_OSAL/
                         - lora_osal.c
                         - lora_osal.h
                         - lora_osal_esp32.c
+                    - LoRaPlatConfig.h
                 - CMakeLists.txt
         - main/
             - CMakeLists.txt
             - main.c
         - CMakeLists.txt
-        - pin_config.txt
     - LoRaPlatForSTM32/
         - LoRa_Plat/
             - 0_OSAL/
@@ -62,8 +58,7 @@
         - User/
             - lora_demo_osal.c
             - main.c
-        - Pin_Config.txt
-    - stm32端双机互传测试main文件.txt
+    - 项目定位.md
 ```
 
 
@@ -80,28 +75,6 @@ cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(LoRaPlatForESP32S3)
-
-```
-</file>
-<file path="LoRaPlatForESP32S3\components\bsp_button\CMakeLists.txt">
-```txt
-# components/bsp_button/CMakeLists.txt
-
-idf_component_register(
-    SRCS "src/Key.c" "src/KeyManager.c" "src/key_port_esp32.c"
-    INCLUDE_DIRS "include"
-    REQUIRES driver esp_timer  # <--- 在这里添加 esp_timer
-)
-
-```
-</file>
-<file path="LoRaPlatForESP32S3\components\bsp_led\CMakeLists.txt">
-```txt
-idf_component_register(
-    SRCS "src/bsp_led.c"
-    INCLUDE_DIRS "include"
-    REQUIRES led_strip  # 依赖官方组件
-)
 
 ```
 </file>
@@ -152,7 +125,7 @@ idf_component_register(
   ******************************************************************************
   * @file    lora_osal.c
   * @author  LoRaPlat Team
-  * @brief   操作系统抽象层 (OSAL) 核心实现 
+  * @brief   操作系统抽象层 (OSAL) 核心实现 V3.6
   ******************************************************************************
   */
 
@@ -531,6 +504,227 @@ void LoRa_OSAL_Init_ESP32(void) {
 
 ```
 </file>
+<file path="LoRaPlatForESP32S3\components\loraplat\src\LoRaPlatConfig.h">
+```h
+#ifndef __LORA_PLAT_CONFIG_H
+#define __LORA_PLAT_CONFIG_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+
+// ============================================================
+//                    版本号 v3.2.1
+// ============================================================
+
+
+// ============================================================
+//                    0. 原port层参数配置
+// ============================================================
+
+// [删除] #define LORA_UART_BAUDRATE  115200
+// [新增] 如下：
+#define LORA_TARGET_BAUDRATE    9600  // 目标通信波特率
+
+
+
+
+
+// 空中速率
+typedef enum {
+    LORA_RATE_0K3 = 0, LORA_RATE_1K2, LORA_RATE_2K4,
+    LORA_RATE_4K8, LORA_RATE_9K6, LORA_RATE_19K2
+} LoRa_AirRate_t;
+
+// 发射功率
+typedef enum {
+    LORA_POWER_11dBm = 0, LORA_POWER_14dBm,
+    LORA_POWER_17dBm, LORA_POWER_20dBm
+} LoRa_Power_t;
+
+// 传输模式
+typedef enum {
+    LORA_TMODE_TRANSPARENT = 0, // 透传模式 (默认)
+    LORA_TMODE_FIXED       = 1  // 定向模式
+} LoRa_TMode_t;
+
+// ============================================================
+//                    2. 默认出厂配置
+// ============================================================
+#define DEFAULT_LORA_CHANNEL    23              // 默认信道 23 (433MHz)
+#define DEFAULT_LORA_RATE       LORA_RATE_19K2  // 默认高速
+#define DEFAULT_LORA_POWER      LORA_POWER_11dBm // 默认低功耗
+#define DEFAULT_LORA_TMODE      LORA_TMODE_TRANSPARENT
+#define DEFAULT_LORA_TOKEN      0x00000000      // 默认安全令牌
+
+// 特殊 ID 定义
+#define LORA_ID_UNASSIGNED      0x0000          // 未分配 ID (新设备默认)
+#define LORA_ID_BROADCAST       0xFFFF          // 广播 ID
+#define LORA_HW_ADDR_DEFAULT    0x0000          // 默认物理地址 (全通)
+#define LORA_GROUP_ID_DEFAULT   0x0000          // 默认组 ID (0表示无分组或默认组)
+
+// ============================================================
+//                    3. 配置结构体
+// ============================================================
+// [修改] Magic变更为0x5E以强制刷新旧Flash结构 (V3.0 Update)
+#define LORA_CFG_MAGIC          0x5E            
+
+typedef struct {
+    uint8_t  magic;             // 有效标志
+    
+    // --- 身份识别 (Identity) ---
+    uint32_t uuid;              // 32位唯一标识 (随机生成，终身不变)
+    uint16_t net_id;            // 逻辑 ID (用于业务通信)
+    uint16_t group_id;          // [新增] 组 ID (用于组播/逻辑分组)
+    uint32_t token;             // 安全令牌 (可选)
+    
+    // --- 硬件参数 (Physical) ---
+    uint16_t hw_addr;           // 物理地址 (写入模块AT+ADDR，通常为0)
+    uint8_t  channel;           // 信道 (0-31)
+    uint8_t  power;             // 功率 (0-3)
+    uint8_t  air_rate;          // 空速 (0-5)
+    uint8_t  tmode;             // 传输模式 (0=透传, 1=定向)
+    
+    uint8_t  padding[1];        // 对齐保留 (调整padding以保持4字节对齐)
+} LoRa_Config_t;
+
+// ============================================================
+//                    4. LoRaPlat内部系统参数配置 (LoRaPlat System Parameters)
+// ============================================================
+
+/**
+ * @brief ACK 确认机制开关
+ * @note  true:  开启。发送数据时，如果设置了需要ACK，协议栈会等待接收方的确认包。
+ *               如果超时未收到，会自动触发重传。适合对可靠性要求高的场景（如报警、控制指令）。
+ *        false: 关闭。发送即忘（Fire and Forget）。适合对实时性要求高、允许少量丢包
+ *               或通过上层业务逻辑保证可靠性的场景（如高频传感器数据上报）。
+ */
+//#define LORA_ENABLE_ACK         true
+
+/**
+ * @brief CRC16 数据校验开关
+ * @note  true:  开启。协议栈会在数据包尾部附加2字节的CRC校验码。接收方会计算校验码，
+ *               如果不匹配则直接丢弃该包，防止因无线干扰导致的乱码数据进入业务层。
+ *        false: 关闭。节省2字节开销，但应用层可能收到错误的数据。
+ */
+#define LORA_ENABLE_CRC         true
+
+/**
+ * @brief 调试日志开关
+ * @note  1: 开启。通过 OSAL_Log 输出日志。
+ *        0: 关闭。所有日志语句在编译阶段被移除，零开销。
+ */
+#define LORA_DEBUG_PRINT        1 
+
+/**
+ * @brief ACK 回复延时 (单位: ms)
+ * @note  从机在收到数据后，不会立即回复 ACK，而是等待这段时间再发。
+ *        原因：LoRa 模块是半双工的，主机发送完数据后，需要几十毫秒的时间从 TX 模式
+ *        切换回 RX 模式。如果从机回复太快，主机还没准备好接收，ACK 就会丢失。
+ *        建议值：50~200ms。
+ */
+#define LORA_ACK_DELAY_MS       100
+
+/**
+ * @brief 发送超时时间 (单位: ms)
+ * @note  指数据写入串口并启动 DMA 发送后，等待“发送完成”信号的最长时间。
+ *        如果超过这个时间模块还没发完（比如模块死机或 AUX 信号异常），
+ *        协议栈会判定发送失败并复位状态机，防止程序卡死。
+ */
+#define LORA_TX_TIMEOUT_MS      1000
+
+/**
+ * @brief 等待 ACK 超时时间 (单位: ms)
+ * @note  主机发送数据后，等待从机回复 ACK 的最长耐心时间。
+ *        这个时间必须大于 (空中传输时间 + LORA_ACK_DELAY_MS + 从机处理时间)。
+ *        如果超时未收到 ACK，协议栈会触发重传逻辑。
+ */
+#define LORA_ACK_TIMEOUT_MS     2000
+
+/**
+ * @brief 最大重传次数
+ * @note  当等待 ACK 超时后，协议栈会自动重试发送的次数。
+ *        例如设置为 3，则总共最多尝试发送 1(初次) + 3(重试) = 4 次。
+ *        如果重传这么多次依然失败，回调函数会报告 LORA_ERR_ACK_TIMEOUT 错误。
+ */
+#define LORA_MAX_RETRY          3
+
+/**
+ * @brief Flash 参数保存开关
+ * @note  1: 开启。支持掉电保存配置 (NetID, Channel 等)。
+ *           初始化时会尝试从 Flash 读取参数覆盖默认值。
+ *           收到 CMD:CFG 指令时会将新参数写入 Flash。但需要用户
+ *					 自己实现非易失性存储
+ *        0: 关闭。纯内存模式。
+ *           每次上电都强制使用代码中的默认宏 (DEFAULT_LORA_xxx)。
+ *           适合批量量产（通过修改 Hex/宏）或防止参数被意外篡改。
+ */
+#define LORA_ENABLE_FLASH_SAVE  1
+
+// ============================================================
+//                    5. 协议栈高级参数 (Advanced)
+// ============================================================
+/**
+ * @brief 重传间隔时间 (单位: ms)
+ * @note  发送数据后，如果超过此时间未收到 ACK，将触发重传。
+ *        建议值：1500ms (需大于 LORA_ACK_DELAY_MS + 空中传输时间)
+ */
+#define LORA_RETRY_INTERVAL_MS  1500
+
+/**
+ * @brief 接收去重表大小
+ * @note  记录最近活跃的 N 个设备的 ID 和 Seq，用于过滤重复包。
+ *        采用 LRU (最近最少使用) 策略淘汰旧条目。
+ *        建议值：4~8 (视 RAM 资源而定，每条目约占用 8 字节)
+ */
+#define LORA_DEDUP_MAX_COUNT    4
+
+
+// ============================================================
+//                    6. 缓冲区配置 (Buffer Config)
+// ============================================================
+#define MGR_TX_BUF_SIZE     512   // 发送队列大小
+#define MGR_RX_BUF_SIZE     512   // 接收缓冲区大小
+
+// ============================================================
+//                    7. 广播模式参数配置
+// ============================================================
+
+/**
+ * @brief 广播包盲发次数
+ * @note  广播包没有 ACK 机制，为了提高送达率，采用连续多次发送的策略。
+ *        建议值：3 (即发送 1 次 + 重发 2 次)
+ */
+#define LORA_BROADCAST_REPEAT   3
+
+/**
+ * @brief 广播包发送间隔 (单位: ms)
+ * @note  连续发送广播包之间的“留白”时间，给接收端处理喘息的机会。
+ *        建议值：50ms
+ */
+#define LORA_BROADCAST_INTERVAL 50
+
+
+
+// ============================================================
+//                    8. OTA 与 高级功能
+// ============================================================
+#define LORA_ENABLE_OTA_CFG     1       // 开启 OTA 远程配置
+#define LORA_REBOOT_DELAY_MS    3000    // 回复 ACK 后等待多久执行软重启
+
+// [新增] 消息 ID 类型定义 (0 为无效 ID)
+typedef uint16_t LoRa_MsgID_t;
+
+
+// 在 LoRaPlatConfig.h 底部添加
+typedef struct {
+    bool NeedAck;
+} LoRa_SendOpt_t;
+
+#endif // __LORA_PLAT_CONFIG_H
+
+```
+</file>
 <file path="LoRaPlatForESP32S3\main\CMakeLists.txt">
 ```txt
 idf_component_register(
@@ -550,87 +744,65 @@ idf_component_register(
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_system.h" // for esp_restart
 #include "nvs_flash.h"
-#include "driver/uart.h" // 用于配置串口缓冲
+#include "driver/uart.h"
 
 // 引入组件头文件
 #include "bsp_led.h"
-#include "KeyManager.h"
-#include "Key.h"
 
-// 引入 LoRaPlat
+// 引入 LoRaPlat (只引入 Service 层)
 #include "lora_service.h"
 #include "lora_port.h"
-#include "lora_service_command.h" // [新增] 引入指令处理头文件
+#include "lora_service_command.h"
 
 static const char *TAG = "MAIN";
 
 // --- 引脚定义 ---
 #define PIN_WS2812      48
-#define PIN_BUTTON      21
+#define PIN_BUTTON      0 
 
 // --- 声明外部初始化函数 ---
 extern void LoRa_OSAL_Init_ESP32(void);
 
 // ============================================================
-//                    NVS 存储适配 (新增)
+//                    NVS 存储适配
 // ============================================================
-
 #define NVS_NAMESPACE "lora_store"
 #define NVS_KEY_CFG   "sys_cfg"
 
 static void App_SaveConfig(const LoRa_Config_t *cfg) {
     nvs_handle_t my_handle;
     esp_err_t err;
-
-    // 1. 打开 NVS
     err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &my_handle);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Error (%s) opening NVS handle!", esp_err_to_name(err));
+        ESP_LOGE(TAG, "NVS Open Failed");
         return;
     }
-
-    // 2. 写入结构体 (Blob)
-    err = nvs_set_blob(my_handle, NVS_KEY_CFG, cfg, sizeof(LoRa_Config_t));
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to write config!");
-    } else {
-        // 3. 提交
-        err = nvs_commit(my_handle);
-        if (err == ESP_OK) {
-            ESP_LOGI(TAG, "Config committed to NVS.");
-        }
-    }
-
-    // 4. 关闭
+    nvs_set_blob(my_handle, NVS_KEY_CFG, cfg, sizeof(LoRa_Config_t));
+    nvs_commit(my_handle);
     nvs_close(my_handle);
+    ESP_LOGI(TAG, "Config Saved to NVS");
 }
 
 static void App_LoadConfig(LoRa_Config_t *cfg) {
     nvs_handle_t my_handle;
     esp_err_t err;
-
-    // 1. 打开 NVS
     err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &my_handle);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "NVS empty or open failed, using defaults.");
-        return;
-    }
-
-    // 2. 读取结构体
-    size_t required_size = sizeof(LoRa_Config_t);
-    err = nvs_get_blob(my_handle, NVS_KEY_CFG, cfg, &required_size);
-
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Config loaded from NVS.");
+        size_t required_size = sizeof(LoRa_Config_t);
+        nvs_get_blob(my_handle, NVS_KEY_CFG, cfg, &required_size);
+        ESP_LOGI(TAG, "Config Loaded from NVS");
     } else {
-        ESP_LOGW(TAG, "Failed to load config (First run?)");
+        ESP_LOGW(TAG, "NVS Empty, using defaults");
     }
-
-    // 3. 关闭
     nvs_close(my_handle);
 }
 
+static void App_SystemReset(void) {
+    ESP_LOGW(TAG, "System Restarting...");
+    esp_restart();
+}
 
 // ============================================================
 //                    1. LoRa 回调逻辑
@@ -639,70 +811,58 @@ static void App_LoadConfig(LoRa_Config_t *cfg) {
 static void App_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta) {
     ESP_LOGI(TAG, "[RX] From 0x%04X (RSSI:%d): %.*s", src_id, meta->rssi, len, data);
 
-    char cmd_buf[32];
-    if (len < sizeof(cmd_buf)) {
-        memcpy(cmd_buf, data, len);
-        cmd_buf[len] = '\0';
+    char cmd_buf[64];
+    uint16_t copy_len = (len < sizeof(cmd_buf) - 1) ? len : (sizeof(cmd_buf) - 1);
+    memcpy(cmd_buf, data, copy_len);
+    cmd_buf[copy_len] = '\0';
+
+    // 执行动作 (LED 控制)
+    if (strncmp(cmd_buf, "red", 3) == 0) BSP_LED_SetColor(50, 0, 0);
+    else if (strncmp(cmd_buf, "blue", 4) == 0) BSP_LED_SetColor(0, 0, 50);
+    else if (strncmp(cmd_buf, "off", 3) == 0) BSP_LED_SetColor(0, 0, 0);
+
+    // 全量回传 (Echo)
+    // [修改] 捕获 MsgID
+    LoRa_MsgID_t msg_id = LoRa_Service_Send(data, len, src_id, LORA_OPT_CONFIRMED);
+    if (msg_id > 0) {
+        ESP_LOGI(TAG, "Echo Enqueued (ID:%d)", msg_id);
     } else {
-        memcpy(cmd_buf, data, sizeof(cmd_buf) - 1);
-        cmd_buf[sizeof(cmd_buf) - 1] = '\0';
-    }
-
-    // --- LED 控制 ---
-    if (strncmp(cmd_buf, "red", 3) == 0) {
-        ESP_LOGI(TAG, "Action: LED RED");
-        BSP_LED_SetColor(50, 0, 0);
-    } 
-    else if (strncmp(cmd_buf, "blue", 4) == 0 || strncmp(cmd_buf, "bule", 4) == 0) { 
-        ESP_LOGI(TAG, "Action: LED BLUE");
-        BSP_LED_SetColor(0, 0, 50);
-    } 
-    else if (strncmp(cmd_buf, "white", 5) == 0) {
-        ESP_LOGI(TAG, "Action: LED WHITE");
-        BSP_LED_SetColor(20, 20, 20);
-    } 
-    else if (strncmp(cmd_buf, "off", 3) == 0) {
-        ESP_LOGI(TAG, "Action: LED OFF");
-        BSP_LED_SetColor(0, 0, 0);
-    }
-
-    // --- Echo 回传 ---
-    // 此时 LoRaPlat 已经有了发送队列，直接发送即可，无需手动延时
-    bool res = LoRa_Service_Send(data, len, src_id);
-    if (!res) {
-        ESP_LOGW(TAG, "Echo failed (Queue Full)");
+        ESP_LOGW(TAG, "Echo failed (Busy)");
     }
 }
 
 static void App_OnEvent(LoRa_Event_t event, void *arg) {
     switch(event) {
         case LORA_EVENT_INIT_SUCCESS: 
-            ESP_LOGI(TAG, "LoRa Init Success!"); 
+            ESP_LOGI(TAG, "LoRa Stack Ready."); 
             BSP_LED_SetColor(0, 20, 0);
             vTaskDelay(pdMS_TO_TICKS(500));
             BSP_LED_SetColor(0, 0, 0);
             break;
-        case LORA_EVENT_TX_FINISHED:
-            ESP_LOGD(TAG, "TX Finished (ACK OK)");
+            
+        // [新增] 处理带 ID 的成功事件
+        case LORA_EVENT_TX_SUCCESS_ID:
+            ESP_LOGI(TAG, "Msg ID:%d Send Success (ACKed)", *(LoRa_MsgID_t*)arg);
             break;
-        case LORA_EVENT_TX_FAILED:
-            ESP_LOGW(TAG, "TX Failed (Timeout)");
+            
+        // [新增] 处理带 ID 的失败事件
+        case LORA_EVENT_TX_FAILED_ID:
+            ESP_LOGW(TAG, "Msg ID:%d Send Failed (Timeout)", *(LoRa_MsgID_t*)arg);
             break;
-        case LORA_EVENT_BIND_SUCCESS:
-            ESP_LOGI(TAG, "Bind Success! New NetID: %d", *(uint16_t*)arg);
-            break;
+            
         case LORA_EVENT_CONFIG_COMMIT:
-            ESP_LOGI(TAG, "Config Saved to Flash.");
+            ESP_LOGI(TAG, "Config Commit Event Triggered.");
             break;
+            
         default: break;
     }
 }
 
 static const LoRa_Callback_t s_LoRaCb = {
-    .SaveConfig = App_SaveConfig,  // <--- 注册保存函数
-    .LoadConfig = App_LoadConfig,  // <--- 注册加载函数
-    .GetRandomSeed = NULL,
-    .SystemReset = NULL,
+    .SaveConfig = App_SaveConfig,
+    .LoadConfig = App_LoadConfig,
+    .GetRandomSeed = NULL, 
+    .SystemReset = App_SystemReset,
     .OnRecvData = App_OnRecvData,
     .OnEvent = App_OnEvent
 };
@@ -711,7 +871,6 @@ static const LoRa_Callback_t s_LoRaCb = {
 //                    2. 任务定义
 // ============================================================
 
-// --- LoRa 协议栈驱动任务 ---
 void lora_task_entry(void *arg) {
     ESP_LOGI(TAG, "LoRa Task Started");
     while (1) {
@@ -720,21 +879,14 @@ void lora_task_entry(void *arg) {
     }
 }
 
-// --- [新增] PC 串口控制台任务 ---
 void console_task_entry(void *arg) {
     char line[128];
-    
-    // 提示符
-    printf("\n");
-    printf("========================================\n");
-    printf("   ESP32 LoRaPlat Shell\n");
-    printf("   Try: CMD:00000000:INFO\n");
-    printf("========================================\n");
+    char resp_buf[128]; 
+
+    printf("\n=== ESP32 LoRaPlat Shell ===\n");
 
     while (1) {
-        // 从 stdin (USB/UART0) 读取一行数据，阻塞式
         if (fgets(line, sizeof(line), stdin) != NULL) {
-            // 去除换行符
             char *pos = strchr(line, '\n');
             if (pos) *pos = '\0';
             pos = strchr(line, '\r');
@@ -743,22 +895,25 @@ void console_task_entry(void *arg) {
             if (strlen(line) > 0) {
                 printf("[Shell] Input: %s\n", line);
 
-                // 1. 尝试作为平台指令解析
                 if (strncmp(line, "CMD:", 4) == 0) {
-                    if (LoRa_Service_Command_Process(line)) {
-                        printf(" -> Command Executed OK.\n");
+                    if (LoRa_Service_Command_Process(line, resp_buf, sizeof(resp_buf))) {
+                        printf(" -> CMD Result: %s\n", resp_buf);
                     } else {
-                        printf(" -> Command Failed (Auth Error or Format Error).\n");
+                        printf(" -> CMD Failed\n");
                     }
                 }
-                // 2. 也可以作为普通数据发送给 STM32 (ID=1)
                 else {
-                    printf(" -> Sending to STM32 (ID:1)...\n");
-                    LoRa_Service_Send((uint8_t*)line, strlen(line), 0x0001);
+                    // [修改] 捕获 MsgID 并打印
+                    LoRa_MsgID_t msg_id = LoRa_Service_Send((uint8_t*)line, strlen(line), 0x0001, LORA_OPT_CONFIRMED);
+                    if (msg_id > 0) {
+                        printf(" -> Enqueued ID:%d (Confirmed)...\n", msg_id);
+                    } else {
+                        printf(" -> Send Failed (Busy)\n");
+                    }
                 }
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(50)); // 让出 CPU
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -767,7 +922,6 @@ void console_task_entry(void *arg) {
 // ============================================================
 void app_main(void)
 {
-    // 1. 系统初始化
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -775,43 +929,15 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    // 2. BSP 初始化
     BSP_LED_Init(PIN_WS2812);
-    
-    // 3. LoRa 初始化
     LoRa_OSAL_Init_ESP32();
-    LoRa_Service_Init(&s_LoRaCb, 0x0002); // ESP32 ID = 2
-
-    // 4. 创建任务
-    // LoRa 核心任务 (优先级高一点)
-    xTaskCreate(lora_task_entry, "lora_task", 4096, NULL, 5, NULL);
     
-    // [新增] 控制台任务 (优先级低一点)
+    // 初始化协议栈
+    LoRa_Service_Init(&s_LoRaCb, 0x0002); 
+
+    xTaskCreate(lora_task_entry, "lora_task", 4096, NULL, 5, NULL);
     xTaskCreate(console_task_entry, "console_task", 4096, NULL, 3, NULL);
 }
-
-```
-</file>
-<file path="LoRaPlatForESP32S3\pin_config.txt">
-```txt
-# ==============================================================================
-# [修正版] LoRaPlat Porting Pin Config (ESP32-S3)
-# 基于: ATK-LORA-01 用户手册 V1.3 (6 Pin 接口)
-# ==============================================================================
-
-# --- LoRa 模组 (UART1) ---
-# LoRa_TXD          : GPIO 18  (接 ESP32 RX)
-# LoRa_RXD          : GPIO 17  (接 ESP32 TX)
-# LoRa_MD0          : GPIO 16  (输出, 默认拉低 -> 通信模式)
-# LoRa_AUX          : GPIO 15  (输入, 模块输出高表示忙)
-# LoRa_VCC          : 3.3V
-# LoRa_GND          : GND
-
-# --- 验证外设 ---
-# Status_LED        : GPIO 48  (板载 WS2812)
-# Trigger_Button    : GPIO 21  (外接按钮)
-
-
 
 ```
 </file>
@@ -2058,18 +2184,25 @@ bool LoRa_Driver_Init(const LoRa_Config_t *cfg) {
 // ============================================================
 
 #define RX_WORKSPACE_SIZE  MGR_RX_BUF_SIZE 
+// [优化] 移除 s_RxWorkspace，改用局部变量或直接解析 (此处暂保留，后续优化)
 static uint8_t s_RxWorkspace[RX_WORKSPACE_SIZE];
 
 static LoRa_OnRxData_t s_OnRx = NULL;
 static const LoRa_Config_t *s_Mgr_Config = NULL;
 static const LoRa_Cipher_t *s_Cipher = NULL;
 
-// [新增] 发送缓存队列 (简单的结构体数组环形队列)
+// [新增] 全局消息 ID 计数器
+static LoRa_MsgID_t s_NextMsgID = 1;
+
+// 发送缓存队列
 #define TX_PACKET_QUEUE_SIZE 4 
+
 typedef struct {
     uint8_t  payload[LORA_MAX_PAYLOAD_LEN];
     uint16_t len;
     uint16_t target_id;
+    LoRa_SendOpt_t opt;
+    LoRa_MsgID_t msg_id; // [新增] 记录消息 ID
 } TxRequest_t;
 
 static TxRequest_t s_TxQueue[TX_PACKET_QUEUE_SIZE];
@@ -2091,6 +2224,7 @@ void LoRa_Manager_Init(const LoRa_Config_t *cfg, LoRa_OnRxData_t on_rx) {
     s_TxQ_Head = 0;
     s_TxQ_Tail = 0;
     s_TxQ_Count = 0;
+    s_NextMsgID = 1; // 重置 ID
     
     LoRa_Manager_Buffer_Init();
     LoRa_Manager_FSM_Init(cfg); 
@@ -2100,7 +2234,7 @@ void LoRa_Manager_RegisterCipher(const LoRa_Cipher_t *cipher) {
     s_Cipher = cipher;
 }
 
-// [新增] 尝试从队列中取出并发送
+// [修改] 尝试从队列中取出并发送
 static void _ProcessTxQueue(void) {
     // 1. 如果 FSM 忙，不能发送，直接退出
     if (LoRa_Manager_FSM_IsBusy()) return;
@@ -2112,12 +2246,14 @@ static void _ProcessTxQueue(void) {
     TxRequest_t *req = &s_TxQueue[s_TxQ_Tail];
     
     // 4. 尝试发送给 FSM
+    // [修改] 传递 msg_id
     uint8_t tx_stack_buf[LORA_MAX_PAYLOAD_LEN + 32];
-    if (LoRa_Manager_FSM_Send(req->payload, req->len, req->target_id, tx_stack_buf, sizeof(tx_stack_buf))) {
+    
+    if (LoRa_Manager_FSM_Send(req->payload, req->len, req->target_id, req->opt, req->msg_id, tx_stack_buf, sizeof(tx_stack_buf))) {
         // 发送成功，移动 Tail
         s_TxQ_Tail = (s_TxQ_Tail + 1) % TX_PACKET_QUEUE_SIZE;
         s_TxQ_Count--;
-        LORA_LOG("[MGR] Dequeue TX (Left: %d)\r\n", s_TxQ_Count);
+        LORA_LOG("[MGR] Dequeue TX (ID:%d, Left:%d)\r\n", req->msg_id, s_TxQ_Count);
     }
 }
 
@@ -2127,6 +2263,10 @@ void LoRa_Manager_Run(void) {
     
     // 2. 解析数据包
     LoRa_Packet_t pkt;
+    // [优化] 将 pkt 改为 static 避免栈溢出 (单线程安全)
+    // static LoRa_Packet_t s_RxPkt; 
+    // memset(&s_RxPkt, 0, sizeof(s_RxPkt));
+    // 这里暂时保持原样，因为 pkt 较小且在栈顶
     memset(&pkt, 0, sizeof(pkt));
     
     if (s_Mgr_Config && LoRa_Manager_Buffer_GetRxPacket(&pkt, s_Mgr_Config->net_id, s_Mgr_Config->group_id, 
@@ -2146,48 +2286,55 @@ void LoRa_Manager_Run(void) {
     // 3. 运行状态机
     LoRa_Manager_FSM_Run(s_RxWorkspace, RX_WORKSPACE_SIZE);
     
-    // 4. [新增] 处理发送队列
+    // 4. 处理发送队列
     _ProcessTxQueue();
 }
 
-bool LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id) {
+// [修改] 返回 MsgID
+LoRa_MsgID_t LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt) {
     // 1. 加密处理
-    uint8_t final_payload[LORA_MAX_PAYLOAD_LEN];
+    static uint8_t s_FinalPayload[LORA_MAX_PAYLOAD_LEN];
     uint16_t final_len = len;
     
-    if (len > LORA_MAX_PAYLOAD_LEN) return false;
+    if (len > LORA_MAX_PAYLOAD_LEN) return 0;
 
     if (s_Cipher && s_Cipher->Encrypt) {
-        final_len = s_Cipher->Encrypt(payload, len, final_payload);
-        if (final_len > LORA_MAX_PAYLOAD_LEN) return false; 
+        final_len = s_Cipher->Encrypt(payload, len, s_FinalPayload);
+        if (final_len > LORA_MAX_PAYLOAD_LEN) return 0; 
     } else {
-        memcpy(final_payload, payload, len);
+        memcpy(s_FinalPayload, payload, len);
     }
 
-    // 2. [修改] 尝试入队
-    // 临界区保护
+    // 2. 尝试入队
     uint32_t ctx = OSAL_EnterCritical();
     
     if (s_TxQ_Count >= TX_PACKET_QUEUE_SIZE) {
         OSAL_ExitCritical(ctx);
         LORA_LOG("[MGR] TX Queue Full!\r\n");
-        return false;
+        return 0;
     }
     
     TxRequest_t *req = &s_TxQueue[s_TxQ_Head];
-    memcpy(req->payload, final_payload, final_len);
+    memcpy(req->payload, s_FinalPayload, final_len);
     req->len = final_len;
     req->target_id = target_id;
+    req->opt = opt; 
+    
+    // [新增] 生成 ID
+    req->msg_id = s_NextMsgID++;
+    if (s_NextMsgID == 0) s_NextMsgID = 1; // 跳过 0
+    
+    LoRa_MsgID_t ret_id = req->msg_id;
     
     s_TxQ_Head = (s_TxQ_Head + 1) % TX_PACKET_QUEUE_SIZE;
     s_TxQ_Count++;
     
     OSAL_ExitCritical(ctx);
     
-    // 3. 尝试立即触发一次 (如果 FSM 刚好空闲)
+    // 3. 尝试立即触发一次
     _ProcessTxQueue();
     
-    return true;
+    return ret_id;
 }
 
 bool LoRa_Manager_IsBusy(void) {
@@ -2283,9 +2430,10 @@ void LoRa_Manager_Run(void);
  * @param  payload: 数据内容
  * @param  len: 数据长度
  * @param  target_id: 目标逻辑 ID
- * @return true=成功入队/发送, false=忙或错误
+ * @param  opt: 发送选项
+ * @return >0: 消息 ID, 0: 失败
  */
-bool LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id);
+LoRa_MsgID_t LoRa_Manager_Send(const uint8_t *payload, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt);
 
 /**
  * @brief  查询是否忙碌
@@ -2628,21 +2776,12 @@ bool LoRa_Manager_Buffer_GetRxPacket(LoRa_Packet_t *packet, uint16_t local_id, u
 </file>
 <file path="LoRaPlatForSTM32\LoRa_Plat\3_Manager\lora_manager_fsm.c">
 ```c
-/**
-  ******************************************************************************
-  * @file    lora_manager_fsm.c
-  * @author  LoRaPlat Team
-  * @brief   LoRa 协议状态机实现 (V3.8 Tickless & Decoupled)
-  ******************************************************************************
-  */
-
 #include "lora_manager_fsm.h"
 #include "lora_manager_buffer.h"
 #include "lora_port.h"
 #include "lora_osal.h"
-// [移除] #include "lora_service.h" -> 解除循环依赖
-
-#include "lora_manager.h" // [新增] 引入此头文件以获取 LORA_TIMEOUT_INFINITE 定义
+#include "lora_manager.h" 
+#include "lora_service.h" // [新增] 用于 NotifyEvent
 
 #include <string.h>
 
@@ -2650,7 +2789,6 @@ bool LoRa_Manager_Buffer_GetRxPacket(LoRa_Packet_t *packet, uint16_t local_id, u
 //                    1. 内部状态定义
 // ============================================================
 
-// 注入的配置指针 (只读)
 static const LoRa_Config_t *s_FSM_Config = NULL;
 
 // 去重表条目
@@ -2663,12 +2801,12 @@ typedef struct {
 
 typedef struct {
     LoRa_FSM_State_t state;
-    
-    // [修改] 替换 timer_start 为绝对截止时间
     uint32_t         timeout_deadline; 
-    
     uint8_t          retry_count;
     uint8_t          tx_seq; 
+    
+    // [新增] 当前正在处理的消息 ID
+    LoRa_MsgID_t     current_tx_id;
     
     // --- 重传/广播上下文 ---
     uint8_t  pending_buf[LORA_MAX_PAYLOAD_LEN + 32];
@@ -2692,7 +2830,6 @@ static FSM_Context_t s_FSM;
 //                    2. 内部辅助函数 (Actions)
 // ============================================================
 
-// [新增] 统一状态切换与超时设置
 static void _FSM_SetState(LoRa_FSM_State_t new_state, uint32_t timeout_ms) {
     s_FSM.state = new_state;
     if (timeout_ms == LORA_TIMEOUT_INFINITE) {
@@ -2703,12 +2840,11 @@ static void _FSM_SetState(LoRa_FSM_State_t new_state, uint32_t timeout_ms) {
 }
 
 static void _FSM_Reset(void) {
-    // IDLE 状态无超时
     _FSM_SetState(LORA_FSM_IDLE, LORA_TIMEOUT_INFINITE);
-    
     s_FSM.ack_ctx.pending = false;
     s_FSM.retry_count = 0;
     s_FSM.pending_len = 0; 
+    s_FSM.current_tx_id = 0; // 清除 ID
 }
 
 static void _FSM_SendAck(void) {
@@ -2720,12 +2856,10 @@ static void _FSM_SendAck(void) {
     pkt.NeedAck = false; 
     pkt.HasCrc = LORA_ENABLE_CRC;
     pkt.TargetID = s_FSM.ack_ctx.target_id;
-    // [修改] 使用注入的配置
     pkt.SourceID = s_FSM_Config->net_id;
     pkt.Sequence = s_FSM.ack_ctx.seq; 
     pkt.PayloadLen = 0;
     
-    // [修改] 使用注入的配置
     LoRa_Manager_Buffer_PushAck(&pkt, s_FSM_Config->tmode, s_FSM_Config->channel, ack_stack_buf, sizeof(ack_stack_buf));
     
     s_FSM.ack_ctx.pending = false;
@@ -2776,7 +2910,6 @@ static bool _FSM_Action_PhyTxScheduler(uint8_t *scratch_buf, uint16_t scratch_le
     if (LoRa_Manager_Buffer_HasAckData()) {
         uint16_t len = LoRa_Manager_Buffer_PeekAck(scratch_buf, scratch_len);
         if (len > 0) {
-            LORA_HEXDUMP("TX ACK", scratch_buf, len);
             if (LoRa_Port_TransmitData(scratch_buf, len) > 0) {
                 LoRa_Manager_Buffer_PopAck(len);
                 if (is_need_ack) *is_need_ack = false; 
@@ -2787,15 +2920,10 @@ static bool _FSM_Action_PhyTxScheduler(uint8_t *scratch_buf, uint16_t scratch_le
     else if (s_FSM.state == LORA_FSM_IDLE && LoRa_Manager_Buffer_HasTxData()) {
         uint16_t len = LoRa_Manager_Buffer_PeekTx(scratch_buf, scratch_len);
         if (len > 0) {
-            LORA_HEXDUMP("TX DATA", scratch_buf, len);
             if (LoRa_Port_TransmitData(scratch_buf, len) > 0) {
                 LoRa_Manager_Buffer_PopTx(len);
-                // [注意] 这里不再调用 Service_NotifyEvent，因为解耦了。
-                // 事件通知可以移到 Manager 层，或者通过回调。
-                // 但为了简化，我们暂时保留物理层发送完成不通知，只通知逻辑层完成。
                 
                 if (is_need_ack) {
-                    // [修改] 使用注入的配置
                     uint8_t offset = (s_FSM_Config->tmode == 1) ? 3 : 0;
                     if (len > offset + 3) {
                         *is_need_ack = (scratch_buf[offset + 3] & LORA_CTRL_MASK_NEED_ACK);
@@ -2811,7 +2939,6 @@ static bool _FSM_Action_PhyTxScheduler(uint8_t *scratch_buf, uint16_t scratch_le
 }
 
 static void _FSM_State_AckDelay(uint32_t now) {
-    // [修改] 使用 deadline 判断
     if ((int32_t)(s_FSM.timeout_deadline - now) <= 0) {
         if (s_FSM.ack_ctx.pending) {
             _FSM_SendAck(); 
@@ -2822,7 +2949,6 @@ static void _FSM_State_AckDelay(uint32_t now) {
 }
 
 static void _FSM_State_WaitAck(uint32_t now, uint8_t *scratch_buf, uint16_t scratch_len) {
-    // [修改] 使用 deadline 判断
     if ((int32_t)(s_FSM.timeout_deadline - now) <= 0) {
         if (s_FSM.retry_count < LORA_MAX_RETRY) {
             s_FSM.retry_count++;
@@ -2830,14 +2956,11 @@ static void _FSM_State_WaitAck(uint32_t now, uint8_t *scratch_buf, uint16_t scra
             
             if (s_FSM.pending_len > 0) {
                 LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
-                // [修改] 使用注入的配置
                 LoRa_Manager_Buffer_PushTx(pending, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
                 
-                // 强制发送
                 LoRa_FSM_State_t backup_state = s_FSM.state;
                 s_FSM.state = LORA_FSM_IDLE;
                 if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, NULL)) {
-                    // 发送成功，重置超时
                     _FSM_SetState(LORA_FSM_WAIT_ACK, LORA_RETRY_INTERVAL_MS);
                 } else {
                     s_FSM.state = backup_state; 
@@ -2847,27 +2970,24 @@ static void _FSM_State_WaitAck(uint32_t now, uint8_t *scratch_buf, uint16_t scra
             }
         } else {
             LORA_LOG("[MGR] ACK Failed (Max Retry)\r\n");
-            // [注意] 解耦后无法直接调用 Service_NotifyEvent(LORA_EVENT_TX_FAILED)
-            // 这里需要 Manager 层轮询状态或回调，暂时略过，由上层超时机制兜底
+            // [新增] 触发失败事件
+            LoRa_Service_NotifyEvent(LORA_EVENT_TX_FAILED_ID, (void*)&s_FSM.current_tx_id);
             _FSM_Reset();
         }
     }
 }
 
 static void _FSM_State_BroadcastRun(uint32_t now, uint8_t *scratch_buf, uint16_t scratch_len) {
-    // [修改] 使用 deadline 判断
     if ((int32_t)(s_FSM.timeout_deadline - now) <= 0) {
         if (s_FSM.retry_count < LORA_BROADCAST_REPEAT) {
             s_FSM.retry_count++;
             if (s_FSM.pending_len > 0) {
                 LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
-                // [修改] 使用注入的配置
                 LoRa_Manager_Buffer_PushTx(pending, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
                 
                 LoRa_FSM_State_t backup_state = s_FSM.state;
                 s_FSM.state = LORA_FSM_IDLE;
                 if (_FSM_Action_PhyTxScheduler(scratch_buf, scratch_len, NULL)) {
-                    // 发送成功，重置间隔
                     _FSM_SetState(LORA_FSM_BROADCAST_RUN, LORA_BROADCAST_INTERVAL);
                 } else {
                     s_FSM.state = backup_state;
@@ -2875,6 +2995,8 @@ static void _FSM_State_BroadcastRun(uint32_t now, uint8_t *scratch_buf, uint16_t
             }
         } else {
             // 广播结束
+            // [新增] 触发成功事件 (广播视为成功)
+            LoRa_Service_NotifyEvent(LORA_EVENT_TX_SUCCESS_ID, (void*)&s_FSM.current_tx_id);
             _FSM_Reset();
         }
     }
@@ -2886,30 +3008,27 @@ static void _FSM_State_BroadcastRun(uint32_t now, uint8_t *scratch_buf, uint16_t
 
 void LoRa_Manager_FSM_Init(const LoRa_Config_t *cfg) {
     LORA_CHECK_VOID(cfg);
-    s_FSM_Config = cfg; // [关键] 保存配置指针
-    
+    s_FSM_Config = cfg; 
     _FSM_Reset();
     s_FSM.tx_seq = 0;
     memset(s_FSM.dedup_table, 0, sizeof(s_FSM.dedup_table));
 }
 
-// [新增] Tickless 核心接口
 uint32_t LoRa_Manager_FSM_GetNextTimeout(void) {
     if (s_FSM.timeout_deadline == LORA_TIMEOUT_INFINITE) {
         return LORA_TIMEOUT_INFINITE;
     }
-
     uint32_t now = OSAL_GetTick();
-    
-    // 处理回绕：如果 deadline < now，说明已超时
     if ((int32_t)(s_FSM.timeout_deadline - now) <= 0) {
-        return 0; // 立即唤醒
+        return 0; 
     } else {
-        return s_FSM.timeout_deadline - now; // 剩余时间
+        return s_FSM.timeout_deadline - now; 
     }
 }
 
-bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target_id,
+// [修改] 增加 msg_id 参数
+bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt,
+                           LoRa_MsgID_t msg_id,
                            uint8_t *scratch_buf, uint16_t scratch_len) {
     
     if (s_FSM.state != LORA_FSM_IDLE) {
@@ -2917,29 +3036,35 @@ bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target
         return false; 
     }
 
-    LoRa_Packet_t pkt;
-    memset(&pkt, 0, sizeof(pkt));
+    static LoRa_Packet_t s_TempPkt; 
+    memset(&s_TempPkt, 0, sizeof(s_TempPkt));
     
-    pkt.IsAckPacket = false;
-    pkt.NeedAck = (LORA_ENABLE_ACK && target_id != 0xFFFF); 
-    pkt.HasCrc = LORA_ENABLE_CRC;
-    pkt.TargetID = target_id;
-    // [修改] 使用注入的配置
-    pkt.SourceID = s_FSM_Config->net_id;
-    pkt.Sequence = ++s_FSM.tx_seq;
-    pkt.PayloadLen = len;
+    s_TempPkt.IsAckPacket = false;
+    
+    if (target_id == 0xFFFF) {
+        s_TempPkt.NeedAck = false;
+    } else {
+        s_TempPkt.NeedAck = opt.NeedAck;
+    }
+    
+    s_TempPkt.HasCrc = LORA_ENABLE_CRC;
+    s_TempPkt.TargetID = target_id;
+    s_TempPkt.SourceID = s_FSM_Config->net_id;
+    s_TempPkt.Sequence = ++s_FSM.tx_seq;
+    s_TempPkt.PayloadLen = len;
     if (len > LORA_MAX_PAYLOAD_LEN) len = LORA_MAX_PAYLOAD_LEN;
-    memcpy(pkt.Payload, payload, len);
+    memcpy(s_TempPkt.Payload, payload, len);
     
-    // [修改] 使用注入的配置
-    uint16_t packed_len = LoRa_Manager_Protocol_Pack(&pkt, s_FSM.pending_buf, sizeof(s_FSM.pending_buf), s_FSM_Config->tmode, s_FSM_Config->channel);
+    uint16_t packed_len = LoRa_Manager_Protocol_Pack(&s_TempPkt, s_FSM.pending_buf, sizeof(s_FSM.pending_buf), s_FSM_Config->tmode, s_FSM_Config->channel);
     if (packed_len == 0) return false;
     
-    memcpy(s_FSM.pending_buf, &pkt, sizeof(LoRa_Packet_t));
+    memcpy(s_FSM.pending_buf, &s_TempPkt, sizeof(LoRa_Packet_t));
     s_FSM.pending_len = 1; 
+    
+    // [新增] 保存当前 ID
+    s_FSM.current_tx_id = msg_id;
 
-    // [修改] 使用注入的配置
-    return LoRa_Manager_Buffer_PushTx(&pkt, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
+    return LoRa_Manager_Buffer_PushTx(&s_TempPkt, s_FSM_Config->tmode, s_FSM_Config->channel, scratch_buf, scratch_len);
 }
 
 bool LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet) {
@@ -2948,6 +3073,8 @@ bool LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet) {
             LoRa_Packet_t *pending = (LoRa_Packet_t*)s_FSM.pending_buf;
             if (packet->Sequence == pending->Sequence) {
                 LORA_LOG("[MGR] ACK Recv (Seq %d)\r\n", packet->Sequence);
+                // [新增] 触发成功事件
+                LoRa_Service_NotifyEvent(LORA_EVENT_TX_SUCCESS_ID, (void*)&s_FSM.current_tx_id);
                 _FSM_Reset(); 
             }
         }
@@ -2959,7 +3086,6 @@ bool LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet) {
                 s_FSM.ack_ctx.target_id = packet->SourceID;
                 s_FSM.ack_ctx.seq = packet->Sequence;
                 s_FSM.ack_ctx.pending = true;
-                // [修改] 设置状态和超时
                 _FSM_SetState(LORA_FSM_ACK_DELAY, LORA_ACK_DELAY_MS);
             }
             return false; 
@@ -2969,7 +3095,6 @@ bool LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet) {
             s_FSM.ack_ctx.target_id = packet->SourceID;
             s_FSM.ack_ctx.seq = packet->Sequence;
             s_FSM.ack_ctx.pending = true;
-            // [修改] 设置状态和超时
             _FSM_SetState(LORA_FSM_ACK_DELAY, LORA_ACK_DELAY_MS);
         }
         return true; 
@@ -2987,16 +3112,16 @@ void LoRa_Manager_FSM_Run(uint8_t *scratch_buf, uint16_t scratch_len) {
             if (pending->TargetID == 0xFFFF) {
                 s_FSM.retry_count = 0;
                 LORA_LOG("[MGR] Broadcast Start\r\n");
-                // [修改] 设置状态和超时
                 _FSM_SetState(LORA_FSM_BROADCAST_RUN, LORA_BROADCAST_INTERVAL);
             }
             else if (need_ack) {
                 s_FSM.retry_count = 0;
                 LORA_LOG("[MGR] Wait ACK...\r\n");
-                // [修改] 设置状态和超时
                 _FSM_SetState(LORA_FSM_WAIT_ACK, LORA_ACK_TIMEOUT_MS);
             }
             else {
+                // [新增] 不需要 ACK 的单播，发完即成功
+                LoRa_Service_NotifyEvent(LORA_EVENT_TX_SUCCESS_ID, (void*)&s_FSM.current_tx_id);
                 _FSM_Reset();
             }
         }
@@ -3088,11 +3213,14 @@ bool LoRa_Manager_FSM_ProcessRxPacket(const LoRa_Packet_t *packet);
  * @param  payload: 数据
  * @param  len: 长度
  * @param  target_id: 目标ID
- * @param  scratch_buf: 栈缓冲区 (用于序列化)
+ * @param  opt: 发送选项
+ * @param  msg_id: 消息 ID [新增]
+ * @param  scratch_buf: 栈缓冲区
  * @param  scratch_len: 缓冲区大小
  * @return true=成功入队
  */
-bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target_id,
+bool LoRa_Manager_FSM_Send(const uint8_t *payload, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt,
+                           LoRa_MsgID_t msg_id,
                            uint8_t *scratch_buf, uint16_t scratch_len);
 
 /**
@@ -3407,101 +3535,200 @@ uint16_t LoRa_Manager_Protocol_Unpack(const uint8_t *buffer,
 </file>
 <file path="LoRaPlatForSTM32\LoRa_Plat\4_Service\lora_service.c">
 ```c
+/**
+  ******************************************************************************
+  * @file    lora_service.c
+  * @author  LoRaPlat Team
+  * @brief   LoRa 业务服务层实现 (V3.9.2)
+  *          集成 OTA 拦截、内部自举软重启、动态 ACK 路由。
+  ******************************************************************************
+  */
+
 #include "lora_service.h"
+#include "lora_manager.h"
 #include "lora_service_config.h"
 #include "lora_service_monitor.h"
-// [移除] #include "lora_service_command.h" 
-#include "lora_manager.h"
-
-#include "lora_driver.h" 
-#include "lora_port.h" 
+#include "lora_service_command.h"
+#include "lora_driver.h"
 #include "lora_osal.h"
 #include <string.h>
-#include <stdlib.h>
-
-
-
-static LoRa_Callback_t g_cb; 
-#define CMD_PREFIX "CMD:"
-
-// [新增] 定义无穷大时间 (表示无定时任务)
-#define LORA_TIMEOUT_INFINITE   0xFFFFFFFF
 
 // ============================================================
-//                    内部回调适配
+//                    内部变量与状态
 // ============================================================
 
-static void _On_Mgr_RxData(uint8_t *data, uint16_t len, uint16_t src_id) {
-    // [修改] 彻底移除 CMD 拦截逻辑
-    // 平台不再关心数据内容，直接透传给业务层
-    // 安全性提升：防止恶意指令绕过业务层直接重置设备
-    if (g_cb.OnRecvData) {
-        LoRa_RxMeta_t meta = { .rssi = -128, .snr = 0 };
-        g_cb.OnRecvData(src_id, data, len, &meta);
+// 服务层状态机
+typedef enum {
+    SVC_STATE_RUNNING = 0,
+    SVC_STATE_REBOOT_WAIT, // 等待倒计时结束 (OTA 回执发送中)
+    SVC_STATE_REBOOT_NOW   // 立即重启 (在主循环安全点执行)
+} Service_State_t;
+
+static struct {
+    Service_State_t state;
+    uint32_t reboot_tick;
+} s_SvcCtx;
+
+// 保存初始化参数，用于自举重启
+static const LoRa_Callback_t *s_AppCb = NULL;
+static uint16_t s_SavedNetID = 0;
+
+// [新增] 保存 Cipher 指针，用于重启后恢复
+static const LoRa_Cipher_t *s_SavedCipher = NULL;
+
+
+// ============================================================
+//                    私有函数：内部自举
+// ============================================================
+
+// [新增] 前向声明，解决 _Service_DoReinit 中的调用依赖
+static void _Service_OnRecv(uint8_t *data, uint16_t len, uint16_t src_id);
+
+
+/**
+ * @brief 执行真正的重初始化流程
+ * @note  此函数包含耗时操作 (Flash读取, AT握手)，必须在主循环上下文中调用
+ */
+static void _Service_DoReinit(void) {
+    LORA_LOG("[SVC] Performing Soft Reboot...\r\n");
+    
+    // 1. 重新读取配置 (Config 模块会通过回调从 Flash 加载)
+    LoRa_Service_Config_Init();
+    
+    // [可选] 再次应用 NetID 覆盖 (如果需要)
+    if (s_SavedNetID != 0) {
+        LoRa_Config_t temp_cfg = *LoRa_Service_Config_Get();
+        temp_cfg.net_id = s_SavedNetID;
+        LoRa_Service_Config_Set(&temp_cfg);
+    }
+    
+    const LoRa_Config_t *cfg = LoRa_Service_Config_Get();
+    
+    // 2. 重新初始化驱动 (阻塞式 AT 握手)
+    if (!LoRa_Driver_Init(cfg)) {
+        LORA_LOG("[SVC] Driver Init Failed! Check Hardware.\r\n");
+    }
+    
+    // 3. 重新初始化管理器
+    // 注意：这里重新注册了接收回调
+    // 必须前向声明 _Service_OnRecv 或将其放在前面
+    
+    LoRa_Manager_Init(cfg, _Service_OnRecv);
+		
+    // [新增] 恢复加密算法注册
+    if (s_SavedCipher) {
+        LoRa_Manager_RegisterCipher(s_SavedCipher);
+    }		
+    
+    // 4. 重新初始化监视器
+    LoRa_Service_Monitor_Init();
+    
+    // 5. 恢复状态
+    s_SvcCtx.state = SVC_STATE_RUNNING;
+    
+    // 6. 通知用户
+    if (s_AppCb && s_AppCb->OnEvent) {
+        s_AppCb->OnEvent(LORA_EVENT_INIT_SUCCESS, NULL);
     }
 }
 
+// ============================================================
+//                    内部回调 (Manager -> Service)
+// ============================================================
+
+// 接收数据回调
+static void _Service_OnRecv(uint8_t *data, uint16_t len, uint16_t src_id) {
+    
+#if (defined(LORA_ENABLE_OTA_CFG) && LORA_ENABLE_OTA_CFG == 1)
+    // 1. 尝试拦截 OTA 指令 (CMD:...)
+    if (len > 4 && memcmp(data, "CMD:", 4) == 0) {
+        // [优化] 将栈变量改为静态变量，避免栈溢出 (合计约 200 字节)
+        // 注意：这使得该函数不可重入，但在裸机环境下是安全的
+        static char s_CmdCopyBuf[128];
+        static char s_RespBuf[64];
+        
+        uint16_t copy_len = (len < 127) ? len : 127;
+        memcpy(s_CmdCopyBuf, data, copy_len);
+        s_CmdCopyBuf[copy_len] = '\0';
+        
+        // 调用 Command 模块处理
+        if (LoRa_Service_Command_Process(s_CmdCopyBuf, s_RespBuf, sizeof(s_RespBuf))) {
+            // 发送回执 (使用 Confirmed 确保主机收到)
+            LoRa_Service_Send((uint8_t*)s_RespBuf, strlen(s_RespBuf), src_id, LORA_OPT_CONFIRMED);
+        }
+        return; // 拦截成功，不透传给 App
+    }
+#endif
+
+    // 2. 正常业务数据透传
+    if (s_AppCb && s_AppCb->OnRecvData) {
+        // 简单的 RSSI 模拟 (实际应从驱动获取)
+        LoRa_RxMeta_t meta = { .rssi = -60, .snr = 10 };
+        s_AppCb->OnRecvData(src_id, data, len, &meta);
+    }
+    
+    // 触发事件
+    if (s_AppCb && s_AppCb->OnEvent) {
+        s_AppCb->OnEvent(LORA_EVENT_MSG_RECEIVED, NULL);
+    }
+}
 
 // ============================================================
 //                    核心接口实现
 // ============================================================
 
 void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_id) {
-    if (callbacks) g_cb = *callbacks;
+    s_AppCb = callbacks;
+    s_SavedNetID = override_net_id;
     
-    // 1. 初始化配置模块
-    LoRa_Service_Config_Init();
-    
-    // 2. 加载 Flash 配置 (如果有)
-    if (g_cb.LoadConfig) {
-        LoRa_Config_t flash_cfg;
-        g_cb.LoadConfig(&flash_cfg);
-        if (flash_cfg.magic == LORA_CFG_MAGIC) {
-            LoRa_Service_Config_Set(&flash_cfg);
-        } else {
-            // Flash 无效，保存默认值
-            if (g_cb.SaveConfig) g_cb.SaveConfig(LoRa_Service_Config_Get());
-        }
-    }
-    
-    // 3. 调试覆盖
-    if (override_net_id != 0) {
-        LoRa_Config_t temp = *LoRa_Service_Config_Get();
-        temp.net_id = override_net_id;
-        LoRa_Service_Config_Set(&temp);
-    }
-    
-    // 4. 初始化 Manager
-    LoRa_Manager_Init(LoRa_Service_Config_Get(), _On_Mgr_RxData);
-    
-    // 5. 初始化 Driver (阻塞)
-    // 注意：这里依然调用旧的 Drv_Init，Step 4 会替换它
-    if (LoRa_Driver_Init(LoRa_Service_Config_Get())) {
-        LoRa_Service_NotifyEvent(LORA_EVENT_INIT_SUCCESS, NULL);
-    } else {
-        while(1); // 死循环报警
-    }
+    // 首次初始化，直接执行
+    _Service_DoReinit();
 }
 
 void LoRa_Service_Run(void) {
-    // 1. 运行监视器 (软件看门狗)
+    // [核心] 检查是否需要执行软重启
+    // 在主循环开头执行，确保没有深层调用栈
+    if (s_SvcCtx.state == SVC_STATE_REBOOT_NOW) {
+        _Service_DoReinit();
+        return; // 重启后直接返回，开始新的一轮循环
+    }
+
+    // 1. 协议栈轮询
+    LoRa_Manager_Run();
     LoRa_Service_Monitor_Run();
     
-    // 2. 运行原有逻辑
-    LoRa_Manager_Run();
-		
+    // 2. 软重启倒计时逻辑 (OTA 场景)
+    if (s_SvcCtx.state == SVC_STATE_REBOOT_WAIT) {
+        if (OSAL_GetTick() - s_SvcCtx.reboot_tick > LORA_REBOOT_DELAY_MS) {
+            // 倒计时结束，切换状态，下一轮循环执行
+            s_SvcCtx.state = SVC_STATE_REBOOT_NOW;
+        }
+    }
 }
 
-bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id) {
-    LORA_CHECK(data && len > 0, false);
-    return LoRa_Manager_Send(data, len, target_id);
+// [修改] 返回 MsgID
+LoRa_MsgID_t LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt) {
+    LORA_CHECK(data && len > 0, 0);
+    // 透传给 Manager 层
+    return LoRa_Manager_Send(data, len, target_id, opt);
+}
+
+void LoRa_Service_SoftReset(void) {
+    // 外部请求重启，设置标志位，异步执行
+    s_SvcCtx.state = SVC_STATE_REBOOT_NOW;
+}
+
+uint32_t LoRa_Service_GetSleepDuration(void) {
+    return LoRa_Manager_GetSleepDuration();
 }
 
 void LoRa_Service_FactoryReset(void) {
     LoRa_Service_Config_FactoryReset();
-    if (g_cb.SaveConfig) g_cb.SaveConfig(LoRa_Service_Config_Get());
-    LoRa_Service_NotifyEvent(LORA_EVENT_FACTORY_RESET, NULL);
-    if (g_cb.SystemReset) g_cb.SystemReset();
+    if (s_AppCb && s_AppCb->OnEvent) {
+        s_AppCb->OnEvent(LORA_EVENT_FACTORY_RESET, NULL);
+    }
+    // 触发重启请求
+    LoRa_Service_NotifyEvent(LORA_EVENT_REBOOT_REQ, NULL);
 }
 
 const LoRa_Config_t* LoRa_Service_GetConfig(void) {
@@ -3509,102 +3736,225 @@ const LoRa_Config_t* LoRa_Service_GetConfig(void) {
 }
 
 void LoRa_Service_SetConfig(const LoRa_Config_t *cfg) {
-    LORA_CHECK_VOID(cfg);
     LoRa_Service_Config_Set(cfg);
-    if (g_cb.SaveConfig) g_cb.SaveConfig(cfg);
 }
 
 void LoRa_Service_NotifyEvent(LoRa_Event_t event, void *arg) {
-    if (g_cb.OnEvent) g_cb.OnEvent(event, arg);
+    // --- 内部拦截处理 ---
+    
+    if (event == LORA_EVENT_CONFIG_COMMIT) {
+        // 收到配置提交请求，调用回调保存到 Flash
+        if (s_AppCb && s_AppCb->SaveConfig) {
+            s_AppCb->SaveConfig((const LoRa_Config_t*)arg);
+        }
+    }
+    else if (event == LORA_EVENT_REBOOT_REQ) {
+        // 收到重启请求，进入倒计时
+        s_SvcCtx.state = SVC_STATE_REBOOT_WAIT;
+        s_SvcCtx.reboot_tick = OSAL_GetTick();
+        // 不透传给 App，Service 内部处理
+        return; 
+    }
+
+    // --- 透传给 App ---
+    if (s_AppCb && s_AppCb->OnEvent) {
+        s_AppCb->OnEvent(event, arg);
+    }
 }
 
-// [新增] 综合计算休眠时间
-uint32_t LoRa_Service_GetSleepDuration(void) {
-    // 1. 硬件层一票否决
-    if (LoRa_Driver_IsBusy()) {
-        return 0; 
-    }
+// [新增] 透传 IsBusy
+bool LoRa_Service_IsBusy(void) {
+    return LoRa_Manager_IsBusy();
+}
 
-    // 2. 逻辑层计算剩余时间
-    uint32_t logic_sleep = LoRa_Manager_GetSleepDuration();
-    
-    // 3. 安全余量扣除 (Safety Margin)
-    // 唤醒和恢复时钟需要时间，建议扣除 2ms
-    if (logic_sleep > 2 && logic_sleep != LORA_TIMEOUT_INFINITE) {
-        return logic_sleep - 2;
-    }
-    
-    return logic_sleep;
+// [新增] 透传 RegisterCipher 并保存
+void LoRa_Service_RegisterCipher(const LoRa_Cipher_t *cipher) {
+    s_SavedCipher = cipher;
+    LoRa_Manager_RegisterCipher(cipher);
 }
 
 ```
 </file>
 <file path="LoRaPlatForSTM32\LoRa_Plat\4_Service\lora_service.h">
 ```h
+/**
+  ******************************************************************************
+  * @file    lora_service.h
+  * @author  LoRaPlat Team
+  * @brief   LoRa 业务服务层接口 (V3.9.2)
+  *          负责协调 Manager, Config, Monitor 以及对外提供统一的业务接口。
+  *          支持 OTA 远程配置、动态 ACK 策略及系统软重启。
+  ******************************************************************************
+  */
+
 #ifndef __LORA_SERVICE_H
 #define __LORA_SERVICE_H
 
 #include "lora_osal.h"
 #include "LoRaPlatConfig.h"
+
+#include "lora_manager.h"
+
 #include <stdint.h>
 #include <stdbool.h>
 
 // ============================================================
-//                    1. 数据结构定义
+//                    1. 数据结构与宏定义
 // ============================================================
 
+/**
+ * @brief 发送选项宏定义
+ * @note  LoRa_SendOpt_t 结构体定义在 LoRaPlatConfig.h 中
+ */
+#define LORA_OPT_CONFIRMED      (LoRa_SendOpt_t){ .NeedAck = true }  /*!< 需要 ACK 确认 (可靠传输) */
+#define LORA_OPT_UNCONFIRMED    (LoRa_SendOpt_t){ .NeedAck = false } /*!< 不需要 ACK (发后即忘) */
+
+/**
+ * @brief 接收数据元信息
+ */
 typedef struct {
-    int16_t rssi; 
-    int8_t  snr;  
+    int16_t rssi; /*!< 接收信号强度指示 (dBm) */
+    int8_t  snr;  /*!< 信噪比 (dB) */
 } LoRa_RxMeta_t;
 
+/**
+ * @brief LoRa 系统事件枚举
+ */
 typedef enum {
-    LORA_EVENT_INIT_SUCCESS = 0,
-    LORA_EVENT_BIND_SUCCESS,    
-    LORA_EVENT_GROUP_UPDATE,    
-    LORA_EVENT_CONFIG_START,    
-    LORA_EVENT_CONFIG_COMMIT,   
-    LORA_EVENT_FACTORY_RESET,   
-    LORA_EVENT_REBOOT_REQ,      
-    LORA_EVENT_MSG_RECEIVED,    
+    LORA_EVENT_INIT_SUCCESS = 0, /*!< 初始化成功 (包括软重启完成) */
+    LORA_EVENT_BIND_SUCCESS,     /*!< 绑定成功 (暂未启用) */
+    LORA_EVENT_GROUP_UPDATE,     /*!< 组 ID 更新 */
+    
+    LORA_EVENT_CONFIG_START,     /*!< 开始配置流程 */
+    LORA_EVENT_CONFIG_COMMIT,    /*!< 配置已提交 (应用层需在此事件中将 arg 转为 Config 指针并写入 Flash) */
+    LORA_EVENT_FACTORY_RESET,    /*!< 恢复出厂设置 */
+    
+    LORA_EVENT_REBOOT_REQ,       /*!< 请求重启 (系统进入倒计时，应用层无需处理，仅作通知) */
+    
+    LORA_EVENT_MSG_RECEIVED,     /*!< 收到业务数据 */
     
     // --- 发送相关事件 ---
-    LORA_EVENT_MSG_SENT,        // 物理层发送完成 (DMA 传输结束)
-    LORA_EVENT_TX_FINISHED,     // 发送流程彻底结束 (收到 ACK 或 广播发完)
-    LORA_EVENT_TX_FAILED        // 发送失败 (重传次数耗尽)
+    LORA_EVENT_MSG_SENT,         /*!< 物理层发送完成 (DMA 传输结束) */
+	
+    // [修改] 带 ID 的发送结果事件
+    // arg 参数将指向 LoRa_MsgID_t 类型的变量
+    LORA_EVENT_TX_SUCCESS_ID,    /*!< 发送成功 (收到 ACK 或 UNCONFIRMED 发送完成) */
+    LORA_EVENT_TX_FAILED_ID      /*!< 发送失败 (重传次数耗尽) */
     
 } LoRa_Event_t;
 
 // ============================================================
-//                    2. 回调接口
+//                    2. 回调接口定义
 // ============================================================
+
+/**
+ * @brief 应用层回调函数集
+ */
 typedef struct {
+    /**
+     * @brief 保存配置到非易失性存储器 (NVS/Flash)
+     * @param cfg 待保存的配置结构体指针
+     */
     void (*SaveConfig)(const LoRa_Config_t *cfg);
+
+    /**
+     * @brief 从非易失性存储器加载配置
+     * @param cfg 用于接收配置的结构体指针
+     */
     void (*LoadConfig)(LoRa_Config_t *cfg);
+
+    /**
+     * @brief 获取随机种子 (用于生成 UUID 或 随机避退)
+     * @return 32位随机数
+     */
     uint32_t (*GetRandomSeed)(void); 
+
+    /**
+     * @brief 系统硬件复位接口 (看门狗兜底用)
+     */
     void (*SystemReset)(void);       
+
+    /**
+     * @brief 接收数据回调
+     * @param src_id 源设备逻辑 ID
+     * @param data   数据指针
+     * @param len    数据长度
+     * @param meta   元数据 (RSSI/SNR)
+     */
     void (*OnRecvData)(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta);
+
+    /**
+     * @brief 系统事件回调
+     * @param event 事件类型
+     * @param arg   事件参数 (根据事件类型转换)
+     */
     void (*OnEvent)(LoRa_Event_t event, void *arg);
+
 } LoRa_Callback_t;
 
 // ============================================================
-//                    3. 全局函数
+//                    3. 核心 API
 // ============================================================
 
+/**
+ * @brief  初始化 LoRa 服务层
+ * @param  callbacks 应用层回调函数指针
+ * @param  override_net_id 覆盖默认 NetID (0 表示使用 Config 中的值)
+ */
 void LoRa_Service_Init(const LoRa_Callback_t *callbacks, uint16_t override_net_id);
+
+/**
+ * @brief  服务层主循环 (需在 main loop 中周期调用)
+ * @note   处理协议栈逻辑、监视器及软重启任务
+ */
 void LoRa_Service_Run(void);
-bool LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id);
+/**
+ * @brief  发送数据
+ * @param  data      数据指针
+ * @param  len       数据长度
+ * @param  target_id 目标逻辑 ID (0xFFFF 为广播)
+ * @param  opt       发送选项 (LORA_OPT_CONFIRMED / LORA_OPT_UNCONFIRMED)
+ * @return >0: 成功入队的消息 ID (1~65535)
+ *         0:  队列满或忙，发送失败
+ */
+LoRa_MsgID_t LoRa_Service_Send(const uint8_t *data, uint16_t len, uint16_t target_id, LoRa_SendOpt_t opt);
 
-// [新增] 获取系统建议休眠时长 (Tickless 接口)
-uint32_t LoRa_Service_GetSleepDuration(void);
+/**
+ * @brief  请求协议栈软重启 (异步安全)
+ * @note   调用此函数后，Service 层会在下一次 Run 循环的安全点自动重新初始化驱动和管理器。
+ *         常用于 OTA 配置生效或错误恢复。
+ */
+void LoRa_Service_SoftReset(void);
 
+/**
+ * @brief  恢复出厂设置
+ * @note   清除配置并触发软重启
+ */
 void LoRa_Service_FactoryReset(void);
 
-// 配置访问
+/**
+ * @brief  获取当前系统建议的休眠时长 (Tickless 模式支持)
+ * @return 建议休眠毫秒数 (0 表示忙，不可休眠)
+ */
+uint32_t LoRa_Service_GetSleepDuration(void);
+
+/**
+ * @brief  查询是否忙碌 (包含发送队列、重传等待等)
+ * @return true=忙, false=空闲 (可休眠)
+ */
+bool LoRa_Service_IsBusy(void);
+
+/**
+ * @brief  注册安全算法 (透传给 Manager 层)
+ * @param  cipher: 算法接口指针 (NULL 表示注销)
+ */
+void LoRa_Service_RegisterCipher(const LoRa_Cipher_t *cipher);
+
+// --- 配置访问 ---
 const LoRa_Config_t* LoRa_Service_GetConfig(void);
 void LoRa_Service_SetConfig(const LoRa_Config_t *cfg);
 
-// 内部通知接口 (供 Command 模块调用)
+// --- 内部接口 (供 Command 模块使用) ---
 void LoRa_Service_NotifyEvent(LoRa_Event_t event, void *arg);
 
 #endif // __LORA_SERVICE_H
@@ -3628,6 +3978,8 @@ void LoRa_Service_NotifyEvent(LoRa_Event_t event, void *arg);
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h> // 必须包含，用于 strtoul
+
+#include <inttypes.h> // 为了更好的跨平台兼容bind指令
 
 // ============================================================
 //                    1. 内部辅助函数
@@ -3661,93 +4013,104 @@ static const char* _GetRateStr(uint8_t rate) {
 //                    2. 核心接口实现
 // ============================================================
 
-bool LoRa_Service_Command_Process(char *cmd_str) {
-    // 1. 获取当前配置 (用于比对 Token)
+bool LoRa_Service_Command_Process(char *cmd_str, char *out_resp, uint16_t max_len) {
     const LoRa_Config_t *cfg = LoRa_Service_Config_Get();
     
-    // 2. 格式检查: CMD
+    // 1. 格式检查: CMD
     char *prefix = strtok(cmd_str, ":"); 
     if (prefix == NULL || strcmp(prefix, "CMD") != 0) return false;
     
-    // 3. [安全核心] 提取并校验 Token
+    // 2. Token 校验
     char *token_str = strtok(NULL, ":");
-    if (token_str == NULL) {
-        LORA_LOG("[SEC] Missing Token in Command!\r\n");
-        return false;
-    }
+    if (token_str == NULL) return false;
     
-    // 使用 strtoul 解析 hex 字符串
     uint32_t input_token = (uint32_t)strtoul(token_str, NULL, 16);
     if (input_token != cfg->token) {
-        LORA_LOG("[SEC] Token Mismatch! Expect %08X, Got %08X\r\n", cfg->token, input_token);
-        return false; // 鉴权失败，拒绝执行
+        LORA_LOG("[SEC] Token Mismatch!\r\n");
+        return false; 
     }
 
-    // 4. 提取具体指令与参数
+    // 3. 提取指令与参数
     char *cmd = strtok(NULL, "="); 
-    char *params = strtok(NULL, ""); // 获取剩余所有字符串作为参数
+    char *params = strtok(NULL, ""); // 获取剩余所有字符串
 
     if (cmd == NULL) return false;
 
-    LORA_LOG("[SVC] Auth OK. Executing: %s\r\n", cmd);
+    LORA_LOG("[SVC] Executing: %s\r\n", cmd);
     
-    // 准备修改配置
-    LoRa_Config_t new_cfg = *cfg;
-    bool cfg_changed = false;
-
-    // --- 指令处理逻辑 ---
-
-    // INFO
+    // --- INFO 指令 ---
     if (strcmp(cmd, "INFO") == 0) {
-        LORA_LOG("=== LoRa Configuration ===\r\n");
-        LORA_LOG("  UUID:    %08X\r\n", new_cfg.uuid);
-        LORA_LOG("  NetID:   %d\r\n", new_cfg.net_id);
-        LORA_LOG("  Group:   %d\r\n", new_cfg.group_id);
-        LORA_LOG("  Token:   %08X\r\n", new_cfg.token);
-        LORA_LOG("  Chan:    %d\r\n", new_cfg.channel);
-        // [修复] 这里调用了辅助函数，消除了 Warning #177
-        LORA_LOG("  Power:   %s\r\n", _GetPowerStr(new_cfg.power));
-        LORA_LOG("  Rate:    %s\r\n", _GetRateStr(new_cfg.air_rate));
-        LORA_LOG("==========================\r\n");
+        // [修改] 使用辅助函数 _GetRateStr 和 _GetPowerStr 消除编译警告，并提供更友好的信息
+        snprintf(out_resp, max_len, "ID:%d,CH:%d,RATE:%s,PWR:%s", 
+                 cfg->net_id, 
+                 cfg->channel, 
+                 _GetRateStr(cfg->air_rate), 
+                 _GetPowerStr(cfg->power));
         return true;
     }
     
-    // BIND (格式: BIND=UUID,NetID)
-    else if (strcmp(cmd, "BIND") == 0 && params != NULL) {
-        uint32_t target_uuid;
-        uint16_t new_net_id;
+    // --- CFG 指令 (核心 OTA 逻辑) ---
+    // 格式: CMD:TOKEN:CFG=CH:23,PWR:1,RATE:5
+    else if (strcmp(cmd, "CFG") == 0 && params != NULL) {
+        LoRa_Config_t new_cfg = *cfg;
+        bool changed = false;
         
-        // 尝试解析 Hex UUID
-        int parsed = sscanf(params, "%x,%hu", &target_uuid, &new_net_id);
-        if (parsed != 2) parsed = sscanf(params, "%u,%hu", &target_uuid, &new_net_id);
-
-        if (parsed == 2) {
-            if (target_uuid == new_cfg.uuid) {
-                new_cfg.net_id = new_net_id;
-                cfg_changed = true;
-                LoRa_Service_NotifyEvent(LORA_EVENT_BIND_SUCCESS, &new_net_id);
-            } else {
-                LORA_LOG("[CMD] UUID Mismatch for BIND.\r\n");
+        // 使用逗号分隔多个参数
+        char *pair = strtok(params, ",");
+        while (pair != NULL) {
+            // 解析 Key:Value
+            char *key = pair;
+            char *val_str = strchr(pair, ':');
+            if (val_str) {
+                *val_str = '\0'; // 切断 Key
+                val_str++;       // 指向 Value
+                int val = atoi(val_str);
+                
+                if (strcmp(key, "CH") == 0) {
+                    new_cfg.channel = (uint8_t)val;
+                    changed = true;
+                } else if (strcmp(key, "PWR") == 0) {
+                    new_cfg.power = (uint8_t)val;
+                    changed = true;
+                } else if (strcmp(key, "RATE") == 0) {
+                    new_cfg.air_rate = (uint8_t)val;
+                    changed = true;
+                } else if (strcmp(key, "NET") == 0) {
+                    new_cfg.net_id = (uint16_t)val;
+                    changed = true;
+                } else if (strcmp(key, "GRP") == 0) {
+                    new_cfg.group_id = (uint16_t)val;
+                    changed = true;
+                } else if (strcmp(key, "ADDR") == 0) {
+                    new_cfg.hw_addr = (uint16_t)val;
+                    changed = true;
+                }
             }
+            pair = strtok(NULL, ",");
+        }
+        
+        if (changed) {
+            // 1. 更新内存副本
+            LoRa_Service_Config_Set(&new_cfg);
+            
+            // 2. [新增] 通知 Service 层保存到 Flash
+            LoRa_Service_NotifyEvent(LORA_EVENT_CONFIG_COMMIT, (void*)&new_cfg);
+            
+            // 3. 通知 Service 层准备重启
+            LoRa_Service_NotifyEvent(LORA_EVENT_REBOOT_REQ, NULL);
+            
+            snprintf(out_resp, max_len, "OK, Re-init in %dms", LORA_REBOOT_DELAY_MS);
+            return true;
+        } else {
+            snprintf(out_resp, max_len, "ERR: No Change");
+            return true;
         }
     }
     
-    // RST
+    // --- RST 指令 ---
     else if (strcmp(cmd, "RST") == 0) {
         LoRa_Service_NotifyEvent(LORA_EVENT_REBOOT_REQ, NULL);
-        return true;
-    }
-    
-    // FACTORY
-    else if (strcmp(cmd, "FACTORY") == 0) {
-        LoRa_Service_FactoryReset();
-        return true;
-    }
-    
-    // 应用变更
-    if (cfg_changed) {
-        LoRa_Service_Config_Set(&new_cfg);
-        LoRa_Service_NotifyEvent(LORA_EVENT_CONFIG_COMMIT, NULL);
+        snprintf(out_resp, max_len, "OK, Rebooting...");
         return true;
     }
     
@@ -3777,9 +4140,11 @@ bool LoRa_Service_Command_Process(char *cmd_str) {
 /**
  * @brief  处理平台指令字符串 (带 Token 校验)
  * @param  cmd_str: 指令字符串 (将被 strtok 修改，请传入副本)
- * @return true=指令鉴权通过并已执行, false=鉴权失败或格式错误
+ * @param  out_resp: [输出] 响应字符串缓冲区
+ * @param  max_len:  [输入] 缓冲区最大长度
+ * @return true=执行成功且需要发送回执, false=忽略
  */
-bool LoRa_Service_Command_Process(char *cmd_str);
+bool LoRa_Service_Command_Process(char *cmd_str, char *out_resp, uint16_t max_len);
 
 #endif // __LORA_SERVICE_COMMAND_H
 
@@ -3857,14 +4222,35 @@ const LoRa_Config_t* LoRa_Service_Config_Get(void) {
     return &s_CurrentConfig;
 }
 
+// [修改] 增加 Flash 保存逻辑
 void LoRa_Service_Config_Set(const LoRa_Config_t *cfg) {
     if (cfg) {
-        // 【修改】适配新的临界区接口
         uint32_t primask = OSAL_EnterCritical();
         memcpy(&s_CurrentConfig, cfg, sizeof(LoRa_Config_t));
         OSAL_ExitCritical(primask);
+        
+        // [新增] 立即调用回调保存到 Flash (阻塞式)
+        // 注意：这里需要获取 Service 层的回调，但 Config 模块没有直接持有。
+        // 方案：我们通过 LoRa_Service_GetCallback() 获取（需要在 Service.h 暴露）
+        // 或者，更简单的，我们在 Service 层初始化 Config 时传入回调。
+        // 鉴于目前架构，我们假设 Service 层会处理，或者我们在这里直接调用一个外部弱符号？
+        
+        // 为了不破坏架构，我们修改一下逻辑：
+        // Config 模块只负责内存。Service 层在调用 Config_Set 之前或之后负责调用 SaveConfig。
+        // 但 Command 模块调用了 Config_Set。
+        
+        // **修正方案**：在 lora_service.c 中增加一个 Helper 函数供 Command 调用，
+        // 或者让 Config 模块能访问回调。
+        // 这里我们采用最直接的方式：在 lora_service.c 中暴露一个 Save 接口给 Command 用，
+        // 但 Command 已经写了调用 Config_Set。
+        
+        // **最终方案**：让 Config_Set 只是更新内存。Command 模块在调用 Config_Set 后，
+        // 显式触发 LORA_EVENT_CONFIG_COMMIT 事件。
+        // Service 层捕获该事件并调用 SaveConfig。
+        // 这样解耦最好。
     }
 }
+
 void LoRa_Service_Config_FactoryReset(void) {
     _LoadDefaults();
     s_CurrentConfig.magic = 0; // 标记为无效，下次上电会重置
@@ -4095,7 +4481,7 @@ typedef struct {
  *        false: 关闭。发送即忘（Fire and Forget）。适合对实时性要求高、允许少量丢包
  *               或通过上层业务逻辑保证可靠性的场景（如高频传感器数据上报）。
  */
-#define LORA_ENABLE_ACK         true
+//#define LORA_ENABLE_ACK         true
 
 /**
  * @brief CRC16 数据校验开关
@@ -4202,125 +4588,22 @@ typedef struct {
 
 
 
+// ============================================================
+//                    8. OTA 与 高级功能
+// ============================================================
+#define LORA_ENABLE_OTA_CFG     1       // 开启 OTA 远程配置
+#define LORA_REBOOT_DELAY_MS    3000    // 回复 ACK 后等待多久执行软重启
+
+// [新增] 消息 ID 类型定义 (0 为无效 ID)
+typedef uint16_t LoRa_MsgID_t;
+
+
+// 在 LoRaPlatConfig.h 底部添加
+typedef struct {
+    bool NeedAck;
+} LoRa_SendOpt_t;
+
 #endif // __LORA_PLAT_CONFIG_H
-
-```
-</file>
-<file path="LoRaPlatForSTM32\Pin_Config.txt">
-```txt
-===========================================================
-              STM32F103C8T6 引脚分配表 (LoRa版)
-===========================================================
-
-[1. 调试/日志接口 (PC通信)]
------------------------------------------------------------
-功能        STM32引脚      外部连接
-UART1_TX    PA9           -> USB-TTL RX
-UART1_RX    PA10          -> USB-TTL TX
-GND         GND           -> USB-TTL GND
-
-[2. LoRa无线模块 (ATK-LORA-01)]
------------------------------------------------------------
-功能        STM32引脚      外部连接          备注
-UART3_TX    PB10          -> LoRa RXD       (注意交叉连接)
-UART3_RX    PB11          -> LoRa TXD       (注意交叉连接)
-MD0         PA4           -> LoRa MD0       (模式控制: 高=配置, 低=通信)
-AUX         PA5           -> LoRa AUX       (状态指示: 模块忙时输出高)
-VCC         3.3V          -> LoRa VCC       (严禁接5V)
-GND         GND           -> LoRa GND
-
-[3. 人机交互 (LED & OLED)]
------------------------------------------------------------
-功能        STM32引脚      外部连接          备注
-LED1        PA1           -> LED正极        (低电平点亮/根据电路决定)
-LED2        PA2           -> LED正极        (原PA2，现保留用于LED)
-I2C_SCL     PB8           -> OLED SCL
-I2C_SDA     PB9           -> OLED SDA
-
-[4. 其他注意事项]
------------------------------------------------------------
-* PB11 原本可能用于 Key2，请确保已断开按键连接，否则干扰 LoRa 接收。
-* LoRa 模块天线请务必接好，防止烧坏功放。
-* 供电需稳定 3.3V，LoRa 发射瞬间电流较大。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 ```
 </file>
@@ -4412,9 +4695,7 @@ void Demo_OSAL_Init(void) {
   ******************************************************************************
   * @file    main.c
   * @author  LoRaPlat Team
-  * @brief   LoRaPlat V3.8 综合测试例程 (遥控 LED + 安全指令)
-  * @version V1.0
-  * @date    2023-10-27
+  * @brief   LoRaPlat V3.9.3 综合测试例程 (ID Feedback & Layering Fix)
   ******************************************************************************
   */
 
@@ -4425,7 +4706,8 @@ void Demo_OSAL_Init(void) {
 #include "Flash.h"
 #include "lora_service.h" 
 #include "lora_service_command.h" 
-#include "lora_manager.h"      
+// [修改] 移除 lora_manager.h
+// #include "lora_manager.h"      
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -4436,16 +4718,10 @@ volatile uint8_t g_TimeoutFlag;
 extern void Demo_OSAL_Init(void);
 
 // ============================================================================
-// [配置区域] 请根据烧录目标修改此处
+// [配置区域]
 // ============================================================================
-// 1 = 主机 (Master): 发送控制指令 (STM32)
-// 2 = 从机 (Slave):  执行动作 (ESP32)
-#define DEVICE_ROLE     1
-
-// 目标设备 ID (主机发给从机，从机发给主机)
-#define TARGET_ID       ((DEVICE_ROLE == 1) ? 2 : 1)
-
-// 默认安全令牌 (用于 CMD 指令鉴权)
+#define DEVICE_ROLE     1 // 1 = STM32 (Master)
+#define TARGET_ID       2 // 2 = ESP32 (Slave)
 #define DEFAULT_TOKEN   0x00000000
 
 // ============================================================================
@@ -4465,37 +4741,74 @@ const LoRa_Cipher_t my_cipher = { .Encrypt = App_XOR_Crypt, .Decrypt = App_XOR_C
 // 2. 适配层回调 (Adapter Layer)
 // ============================================================================
 
-void Adapter_SaveConfig(const LoRa_Config_t *cfg) { Flash_WriteLoRaConfig(cfg); }
-void Adapter_LoadConfig(LoRa_Config_t *cfg)       { Flash_ReadLoRaConfig(cfg); }
-uint32_t Adapter_GetRandomSeed(void)              { return LoRa_Port_GetEntropy32(); }
-void Adapter_SystemReset(void)                    { NVIC_SystemReset(); }
+// [关键] NVS 保存回调
+void Adapter_SaveConfig(const LoRa_Config_t *cfg) { 
+    Serial_Printf("[NVS] Saving Config to Flash...\r\n");
+    Flash_WriteLoRaConfig(cfg); 
+}
+
+// [关键] NVS 读取回调
+void Adapter_LoadConfig(LoRa_Config_t *cfg) { 
+    Flash_ReadLoRaConfig(cfg); 
+}
+
+uint32_t Adapter_GetRandomSeed(void) { 
+    return LoRa_Port_GetEntropy32(); 
+}
+
+void Adapter_SystemReset(void) { 
+    Serial_Printf("[SYS] Hard Reset Triggered!\r\n");
+    NVIC_SystemReset(); 
+}
 
 // [核心] 接收数据回调
 void Adapter_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta) {
-    // 1. 打印日志 (此时 data 已经是解密后的明文)
-    // 注意：data 未必以 \0 结尾，使用 %.*s 格式化
+    // 打印接收到的回传数据
     Serial_Printf("[RX] From 0x%04X (RSSI:%d): %.*s\r\n", src_id, meta->rssi, len, data);
     
-    // 2. 业务逻辑处理 (Business Logic)
-    // 这里主要是接收 ESP32 的回传 (Echo)
-    // 如果收到 "red", "blue" 等，说明 ESP32 执行成功了
+    // LED2 翻转表示收到数据
+    LED2_Turn();
 }
 
 // 事件回调
 void Adapter_OnEvent(LoRa_Event_t event, void *arg) {
     switch(event) {
-        case LORA_EVENT_INIT_SUCCESS: Serial_Printf("[EVT] LoRa Init OK. Role: %d\r\n", DEVICE_ROLE); break;
-        case LORA_EVENT_TX_FINISHED:  Serial_Printf("[EVT] TX Finished (ACK OK).\r\n"); LED1_Turn(); break; // LED1 闪烁表示发送成功
-        case LORA_EVENT_TX_FAILED:    Serial_Printf("[EVT] TX Failed (Timeout).\r\n"); break;
-        case LORA_EVENT_BIND_SUCCESS: Serial_Printf("[EVT] Bind ID: %d\r\n", *(uint16_t*)arg); break;
+        case LORA_EVENT_INIT_SUCCESS: 
+            Serial_Printf("[EVT] LoRa Stack Ready. Role: %d\r\n", DEVICE_ROLE); 
+            break;
+            
+        case LORA_EVENT_TX_SUCCESS_ID:
+            // [新增] 打印成功消息 ID
+            Serial_Printf("[EVT] Msg ID:%d Sent Success (ACKed).\r\n", *(LoRa_MsgID_t*)arg); 
+            LED1_Turn(); 
+            break; 
+            
+        case LORA_EVENT_TX_FAILED_ID:    
+            // [新增] 打印失败消息 ID
+            Serial_Printf("[EVT] Msg ID:%d Failed (Timeout).\r\n", *(LoRa_MsgID_t*)arg); 
+            break;
+            
+        case LORA_EVENT_BIND_SUCCESS: 
+            Serial_Printf("[EVT] Bind ID: %d\r\n", *(uint16_t*)arg); 
+            break;
+            
+        case LORA_EVENT_CONFIG_COMMIT:
+            // Service 层已经调用了 SaveConfig，这里只是通知 UI
+            Serial_Printf("[EVT] Config Commit Event.\r\n");
+            break;
+            
         default: break;
     }
 }
 
+// 定义回调结构体
 const LoRa_Callback_t my_adapter = {
-    .SaveConfig = Adapter_SaveConfig, .LoadConfig = Adapter_LoadConfig,
-    .GetRandomSeed = Adapter_GetRandomSeed, .SystemReset = Adapter_SystemReset,
-    .OnRecvData = Adapter_OnRecvData, .OnEvent = Adapter_OnEvent
+    .SaveConfig = Adapter_SaveConfig, 
+    .LoadConfig = Adapter_LoadConfig,
+    .GetRandomSeed = Adapter_GetRandomSeed, 
+    .SystemReset = Adapter_SystemReset,
+    .OnRecvData = Adapter_OnRecvData, 
+    .OnEvent = Adapter_OnEvent
 };
 
 // ============================================================================
@@ -4508,14 +4821,14 @@ void Check_First_Run(void) {
         Serial_Printf("[SYS] First Run, Writing Defaults...\r\n");
         memset(&cfg, 0, sizeof(cfg));
         cfg.magic = LORA_CFG_MAGIC;
-        cfg.net_id = DEVICE_ROLE; // 1 or 2
+        cfg.net_id = DEVICE_ROLE; 
         cfg.group_id = 100;
         cfg.token = DEFAULT_TOKEN;
         cfg.hw_addr = 0;
         cfg.channel = 23;
-        cfg.power = 0; // 11dBm
-        cfg.air_rate = 5; // 19.2k
-        cfg.tmode = 0; // Transparent
+        cfg.power = 0; 
+        cfg.air_rate = 5; 
+        cfg.tmode = 0; 
         Flash_WriteLoRaConfig(&cfg);
         NVIC_SystemReset();
     }
@@ -4531,287 +4844,103 @@ int main(void)
     LED_Init();
     Serial_Init();
     Demo_OSAL_Init();
-    Check_First_Run(); // 检查 Flash
+    Check_First_Run(); 
     
-    // 注册加密算法 (可选)
-    LoRa_Manager_RegisterCipher(&my_cipher);
-    
-    // 启动协议栈
-    // 强制覆盖 NetID 以匹配当前 Role (方便调试，实际产品可去掉)
+    // 启动协议栈 (传入回调和 ID)
     LoRa_Service_Init(&my_adapter, DEVICE_ROLE); 
+    
+    // [修改] 使用 Service 层接口注册加密
+    LoRa_Service_RegisterCipher(&my_cipher);
 
-    Serial_Printf("\r\n=== LoRaPlat V3.8 Demo (ID: %d) ===\r\n", DEVICE_ROLE);
-    Serial_Printf("Commands: 'red', 'blue', 'white', 'off'\r\n");
-    Serial_Printf("Admin: 'CMD:00000000:INFO'\r\n");
+    Serial_Printf("\r\n=== LoRaPlat V3.9.3 ID Feedback Test (ID: %d) ===\r\n", DEVICE_ROLE);
+    Serial_Printf("Type ANY text to send (e.g., 'hello')\r\n");
+    Serial_Printf("Local Admin: 'CMD:00000000:INFO'\r\n");
+    Serial_Printf("Remote OTA: Send 'CMD:00000000:CFG=CH:50' from another device\r\n");
 
     char input_buf[128];
+    char resp_buf[128]; // 用于本地指令回显
     uint32_t last_heartbeat = 0;
 
     while (1)
     {
-        // 1. 协议栈驱动
+        // 1. 协议栈驱动 (内部处理软重启)
         LoRa_Service_Run();
 
         // 2. PC 串口指令处理 (用户输入)
         if (Serial_GetRxPacket(input_buf, sizeof(input_buf))) {
             Serial_Printf("[PC] Input: %s\r\n", input_buf);
             
-            // --- 颜色控制指令 (发送给 ESP32) ---
-            // 使用 strncmp 避免回车换行符干扰
-            if (strncmp(input_buf, "red", 3) == 0) {
-                if (LoRa_Service_Send((uint8_t*)"red", 3, TARGET_ID))
-                    Serial_Printf(" -> Sending 'red'...\r\n");
-                else
-                    Serial_Printf(" -> Send Failed (Busy)\r\n");
-            }
-            else if (strncmp(input_buf, "blue", 4) == 0 || strncmp(input_buf, "bule", 4) == 0) {
-                if (LoRa_Service_Send((uint8_t*)"blue", 4, TARGET_ID))
-                    Serial_Printf(" -> Sending 'blue'...\r\n");
-                else
-                    Serial_Printf(" -> Send Failed (Busy)\r\n");
-            }
-            else if (strncmp(input_buf, "white", 5) == 0) {
-                if (LoRa_Service_Send((uint8_t*)"white", 5, TARGET_ID))
-                    Serial_Printf(" -> Sending 'white'...\r\n");
-                else
-                    Serial_Printf(" -> Send Failed (Busy)\r\n");
-            }
-            else if (strncmp(input_buf, "off", 3) == 0) {
-                if (LoRa_Service_Send((uint8_t*)"off", 3, TARGET_ID))
-                    Serial_Printf(" -> Sending 'off'...\r\n");
-                else
-                    Serial_Printf(" -> Send Failed (Busy)\r\n");
-            }
-            
             // --- 本地管理指令 (配置自己) ---
-            // 格式: CMD:Token:Command
-            else if (strncmp(input_buf, "CMD:", 4) == 0) {
-                if (LoRa_Service_Command_Process(input_buf))
-                    Serial_Printf(" -> Admin Cmd Executed.\r\n");
-                else
-                    Serial_Printf(" -> Admin Cmd Failed.\r\n");
+            if (strncmp(input_buf, "CMD:", 4) == 0) {
+                // 本地调用也使用新的接口
+                if (LoRa_Service_Command_Process(input_buf, resp_buf, sizeof(resp_buf))) {
+                    Serial_Printf(" -> CMD Result: %s\r\n", resp_buf);
+                } else {
+                    Serial_Printf(" -> CMD Ignored (Auth Fail or Format Err)\r\n");
+                }
             }
+            // --- 通用数据发送 (发送给 ESP32) ---
             else {
-                Serial_Printf(" -> Unknown Command.\r\n");
+                // [关键] 使用 LORA_OPT_CONFIRMED 确保可靠传输
+                // [修改] 获取并打印 MsgID
+                LoRa_MsgID_t msg_id = LoRa_Service_Send((uint8_t*)input_buf, strlen(input_buf), TARGET_ID, LORA_OPT_CONFIRMED);
+                
+                if (msg_id > 0) {
+                    Serial_Printf(" -> Enqueued ID:%d (Confirmed)...\r\n", msg_id);
+                } else {
+                    Serial_Printf(" -> Send Failed (Busy)\r\n");
+                }
             }
         }
 
-        // 3. 心跳 (仅 LED1 闪烁，LED2 用于业务指示)
-        if (GetTick() - last_heartbeat > 1000) {
+        // 3. 心跳 (仅用于证明主循环在跑)
+        if (GetTick() - last_heartbeat > 2000) {
             last_heartbeat = GetTick();
-            LED1_Turn(); 
+            // Serial_Printf("."); 
         }
     }
 }
 
 ```
 </file>
-<file path="stm32端双机互传测试main文件.txt">
-```txt
-/**
-  ******************************************************************************
-  * @file    main.c
-  * @author  LoRaPlat Team
-  * @brief   LoRaPlat V3.8 综合测试例程 (遥控 LED + 安全指令)
-  * @version V1.0
-  * @date    2023-10-27
-  ******************************************************************************
-  */
+<file path="项目定位.md">
+```md
+### LoRaPlat 项目定位 (Project Positioning)
 
-#include "stm32f10x.h"
-#include "Delay.h"
-#include "Serial.h"
-#include "LED.h"
-#include "Flash.h"
-#include "lora_service.h" 
-#include "lora_service_command.h" 
-#include "lora_manager.h"      
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
+**一句话定义：**
+LoRaPlat 是一个专为嵌入式系统设计的、**轻量级**、**高可靠**、**硬件无关** 的 **UART LoRa 链路层中间件 (Link Layer Middleware)**。
 
-#include "lora_port.h"
+**核心价值 (Value Proposition)：**
+它致力于解决廉价 UART LoRa 模组（如 ATK-LORA-01, Ebyte E32 等）在实际工程应用中的痛点，通过软件定义的方式，将一条“不可靠的物理串口线”升级为一条“可靠的逻辑数据链路”。
 
-volatile uint8_t g_TimeoutFlag;
-extern void Demo_OSAL_Init(void);
-// ============================================================================
-// [配置区域] 请根据烧录目标修改此处
-// ============================================================================
-// 1 = 主机 (Master): 发送控制指令
-// 2 = 从机 (Slave):  执行动作 (亮灯)
-#define DEVICE_ROLE     1
+**关键特性 (Key Features)：**
 
-// 目标设备 ID (主机发给从机，从机发给主机)
-#define TARGET_ID       ((DEVICE_ROLE == 1) ? 2 : 1)
+1.  **可靠传输 (Reliability)**：
+    *   内置 **Stop-and-Wait ARQ** (停等协议)，支持超时重传。
+    *   实现 **ACK 确认机制**，确保数据必达。
+    *   支持 **CRC16 校验**，杜绝空中噪声导致的数据篡改。
 
-// 默认安全令牌 (用于 CMD 指令鉴权)
-#define DEFAULT_TOKEN   0x00000000
+2.  **极致解耦 (Decoupling)**：
+    *   **OSAL (操作系统抽象层)**：一套代码，无缝运行于 **裸机 (Bare-Metal)** 与 **RTOS (FreeRTOS/RT-Thread)** 环境。
+    *   **Port (硬件接口层)**：仅依赖基础的 UART 收发与毫秒级时基，极易移植到 STM32, ESP32, MSP430, Linux 等任何平台。
 
-// ============================================================================
-// 1. 业务层加密实现 (示例：简单异或)
-// ============================================================================
-uint16_t App_XOR_Crypt(const uint8_t *in, uint16_t len, uint8_t *out) {
-    uint32_t key = LoRa_Service_GetConfig()->token;
-    for(int i=0; i<len; i++) {
-        out[i] = in[i] ^ (uint8_t)((key >> ((i % 4) * 8)) & 0xFF);
-    }
-    return len;
-}
+3.  **异步并发 (Asynchronous & Concurrency)**：
+    *   **非阻塞设计**：所有 API 均为非阻塞调用，绝不卡死主循环。
+    *   **发送队列**：内置环形发送缓冲，自动处理半双工通信的时序冲突（如 ACK 避让），上层业务无需关心底层忙闲。
 
-const LoRa_Cipher_t my_cipher = { .Encrypt = App_XOR_Crypt, .Decrypt = App_XOR_Crypt };
+4.  **安全与管理 (Security & Management)**：
+    *   **地址过滤**：支持逻辑 ID (NetID) 与 组 ID (GroupID) 过滤，实现点对点与组播通信。
+    *   **指令鉴权**：内置平台级指令解析器 (CMD)，支持 Token 身份验证，可远程修改设备参数（如 ID、信道）。
+    *   **加密钩子**：预留 Payload 加密接口，支持用户自定义算法。
 
-// ============================================================================
-// 2. 适配层回调 (Adapter Layer)
-// ============================================================================
+**适用场景 (Use Cases)：**
+*   **智能家居/楼宇**：节点众多，需要可靠控制（如开关灯必达）的场景。
+*   **工业遥测**：环境恶劣，干扰大，需要数据完整性校验的场景。
+*   **低成本组网**：使用廉价模组快速构建星型网络。
 
-void Adapter_SaveConfig(const LoRa_Config_t *cfg) { Flash_WriteLoRaConfig(cfg); }
-void Adapter_LoadConfig(LoRa_Config_t *cfg)       { Flash_ReadLoRaConfig(cfg); }
-uint32_t Adapter_GetRandomSeed(void)              { return LoRa_Port_GetEntropy32(); }
-void Adapter_SystemReset(void)                    { NVIC_SystemReset(); }
-
-// [核心] 接收数据回调
-void Adapter_OnRecvData(uint16_t src_id, const uint8_t *data, uint16_t len, LoRa_RxMeta_t *meta) {
-    // 1. 打印日志 (此时 data 已经是解密后的明文)
-    Serial_Printf("[RX] From 0x%04X (RSSI:%d): %.*s\r\n", src_id, meta->rssi, len, data);
-    
-    // 2. 业务逻辑处理 (Business Logic)
-    // ---------------------------------------------------------
-    // 场景 A: 远程 LED 控制
-    if (strncmp((char*)data, "LED_ON", 6) == 0) {
-        LED2_ON(); // 点亮板载 LED2
-        Serial_Printf("[APP] Action: LED2 ON\r\n");
-    }
-    else if (strncmp((char*)data, "LED_OFF", 7) == 0) {
-        LED2_OFF(); // 熄灭板载 LED2
-        Serial_Printf("[APP] Action: LED2 OFF\r\n");
-    }
-    
-    // 场景 B: 平台管理指令 (CMD:Token:...)
-    // 注意：这是可选功能，由用户决定是否启用
-    else if (len > 4 && strncmp((char*)data, "CMD:", 4) == 0) {
-        char cmd_buf[128];
-        if (len < sizeof(cmd_buf)) {
-            memcpy(cmd_buf, data, len);
-            cmd_buf[len] = '\0';
-            if (LoRa_Service_Command_Process(cmd_buf)) {
-                Serial_Printf("[APP] Admin Command Executed.\r\n");
-            } else {
-                Serial_Printf("[APP] Admin Command Rejected.\r\n");
-            }
-        }
-    }
-}
-
-// 事件回调
-void Adapter_OnEvent(LoRa_Event_t event, void *arg) {
-    switch(event) {
-        case LORA_EVENT_INIT_SUCCESS: Serial_Printf("[EVT] LoRa Init OK. Role: %d\r\n", DEVICE_ROLE); break;
-        case LORA_EVENT_TX_FINISHED:  Serial_Printf("[EVT] TX Finished (ACK OK).\r\n"); LED1_Turn(); break; // LED1 闪烁表示发送成功
-        case LORA_EVENT_TX_FAILED:    Serial_Printf("[EVT] TX Failed (Timeout).\r\n"); break;
-        case LORA_EVENT_BIND_SUCCESS: Serial_Printf("[EVT] Bind ID: %d\r\n", *(uint16_t*)arg); break;
-        default: break;
-    }
-}
-
-const LoRa_Callback_t my_adapter = {
-    .SaveConfig = Adapter_SaveConfig, .LoadConfig = Adapter_LoadConfig,
-    .GetRandomSeed = Adapter_GetRandomSeed, .SystemReset = Adapter_SystemReset,
-    .OnRecvData = Adapter_OnRecvData, .OnEvent = Adapter_OnEvent
-};
-
-// ============================================================================
-// 3. 辅助函数：首次运行初始化
-// ============================================================================
-void Check_First_Run(void) {
-    LoRa_Config_t cfg;
-    Flash_ReadLoRaConfig(&cfg);
-    if (cfg.magic != LORA_CFG_MAGIC) {
-        Serial_Printf("[SYS] First Run, Writing Defaults...\r\n");
-        memset(&cfg, 0, sizeof(cfg));
-        cfg.magic = LORA_CFG_MAGIC;
-        cfg.net_id = DEVICE_ROLE; // 1 or 2
-        cfg.group_id = 100;
-        cfg.token = DEFAULT_TOKEN;
-        cfg.hw_addr = 0;
-        cfg.channel = 23;
-        cfg.power = 0; // 11dBm
-        cfg.air_rate = 5; // 19.2k
-        cfg.tmode = 0; // Transparent
-        Flash_WriteLoRaConfig(&cfg);
-        NVIC_SystemReset();
-    }
-}
-
-// ============================================================================
-// 4. 主函数
-// ============================================================================
-int main(void)
-{
-    // 硬件初始化
-    SysTick_Init();
-    LED_Init();
-    Serial_Init();
-    Demo_OSAL_Init();
-    Check_First_Run(); // 检查 Flash
-    
-    // 注册加密算法 (可选)
-    LoRa_Manager_RegisterCipher(&my_cipher);
-    
-    // 启动协议栈
-    // 强制覆盖 NetID 以匹配当前 Role (方便调试，实际产品可去掉)
-    LoRa_Service_Init(&my_adapter, DEVICE_ROLE); 
-
-    Serial_Printf("\r\n=== LoRaPlat V3.8 Demo (ID: %d) ===\r\n", DEVICE_ROLE);
-    if (DEVICE_ROLE == 1) {
-        Serial_Printf("Type 'ON'  -> Send LED_ON to Slave\r\n");
-        Serial_Printf("Type 'OFF' -> Send LED_OFF to Slave\r\n");
-    }
-    Serial_Printf("Type 'CMD:00000000:INFO' -> Check Config\r\n");
-
-    char input_buf[128];
-    uint32_t last_heartbeat = 0;
-
-    while (1)
-    {
-        // 1. 协议栈驱动
-        LoRa_Service_Run();
-
-        // 2. PC 串口指令处理 (用户输入)
-        if (Serial_GetRxPacket(input_buf, sizeof(input_buf))) {
-            Serial_Printf("[PC] Input: %s\r\n", input_buf);
-            
-            // --- 业务指令 (发送给对方) ---
-            if (strcmp(input_buf, "ON") == 0) {
-                if (LoRa_Service_Send((uint8_t*)"LED_ON", 6, TARGET_ID))
-                    Serial_Printf(" -> Sending LED_ON...\r\n");
-                else
-                    Serial_Printf(" -> Send Failed (Busy)\r\n");
-            }
-            else if (strcmp(input_buf, "OFF") == 0) {
-                if (LoRa_Service_Send((uint8_t*)"LED_OFF", 7, TARGET_ID))
-                    Serial_Printf(" -> Sending LED_OFF...\r\n");
-                else
-                    Serial_Printf(" -> Send Failed (Busy)\r\n");
-            }
-            
-            // --- 本地管理指令 (配置自己) ---
-            // 格式: CMD:Token:Command
-            else if (strncmp(input_buf, "CMD:", 4) == 0) {
-                if (LoRa_Service_Command_Process(input_buf))
-                    Serial_Printf(" -> Admin Cmd Executed.\r\n");
-                else
-                    Serial_Printf(" -> Admin Cmd Failed.\r\n");
-            }
-        }
-
-        // 3. 心跳 (仅 LED1 闪烁，LED2 用于业务指示)
-        if (GetTick() - last_heartbeat > 1000) {
-            last_heartbeat = GetTick();
-            LED1_Turn(); 
-        }
-    }
-}
-
+**非目标场景 (Non-Goals)：**
+*   **LoRaWAN**：本项目不涉及 LoRaWAN 协议栈，不接入网关服务器。
+*   **高速流媒体**：受限于 LoRa 物理特性，不适合传输音频/视频。
 ```
 </file>
 </project_files>

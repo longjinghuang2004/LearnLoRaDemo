@@ -134,8 +134,33 @@ static const LoRa_Callback_t s_LoRaCb = {
 void lora_task_entry(void *arg) {
     ESP_LOGI(TAG, "LoRa Task Started");
     while (1) {
+        // 1. 协议栈运行
         LoRa_Service_Run();
-        vTaskDelay(pdMS_TO_TICKS(10));
+        
+        // 2. 模拟低功耗调度 (适配 RTOS)
+        if (LoRa_Service_CanSleep()) {
+            // 获取建议休眠时间
+            uint32_t sleep_ms = LoRa_Service_GetSleepDuration();
+            
+            // 限制最大休眠时间，保证响应性 (例如 10ms)
+            // 在 RTOS 中，这里对应的是 vTaskDelay
+            if (sleep_ms > 10) sleep_ms = 10; 
+            if (sleep_ms == 0) sleep_ms = 1; // 至少让出一点时间片
+            
+            vTaskDelay(pdMS_TO_TICKS(sleep_ms));
+        } else {
+            // 忙碌时，仅进行最小调度让步
+            taskYIELD(); 
+        }
+        
+        // [ESP32 特殊处理] 
+        // 因为 IDF UART 驱动隐藏了中断，我们需要主动检查 RX 缓冲区
+        // 如果有数据，手动触发 Notify 机制（虽然在轮询架构下 ReceiveData 会自动读）
+        size_t available = 0;
+        uart_get_buffered_data_len(UART_NUM_1, &available);
+        if (available > 0) {
+            LoRa_Port_NotifyHwEvent();
+        }
     }
 }
 

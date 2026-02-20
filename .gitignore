@@ -130,3 +130,9 @@ Desktop.ini
 *.workspace # General workspace files, can be from various tools
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
+项目简介.md
+研究方向.txt
+*.txt
+LoRaPlat 工业无线通信深度研究.md
+
+Directory Structure for `LoRaPlatDevelop`.txt

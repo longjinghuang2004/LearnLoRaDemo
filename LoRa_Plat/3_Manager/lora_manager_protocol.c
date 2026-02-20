@@ -2,15 +2,13 @@
   ******************************************************************************
   * @file    lora_manager_protocol.c
   * @author  LoRaPlat Team
-  * @brief   LoRa 协议封包解包实现
+  * @brief   LoRa 协议封包解包实现 (V3.9.5 - 16-bit Seq Support)
   ******************************************************************************
   */
 
 #include "lora_manager_protocol.h"
 #include "lora_crc16.h"
-
 #include "lora_osal.h"
-
 #include <string.h>
 
 // ============================================================
@@ -23,18 +21,19 @@ uint16_t LoRa_Manager_Protocol_Pack(const LoRa_Packet_t *packet,
                                     uint8_t tmode,
                                     uint8_t channel)
 {
-    // [修正1] 这里的参数是 buffer_size，不是 length
     LORA_CHECK(packet && buffer && buffer_size > 0, 0);
     
     uint16_t idx = 0;
     
-    // 1. 定点模式头部 (Target Addr + Channel)
+    // 1. 定点模式头部 (Target Addr + Channel) - 仅用于物理层辅助，不计入协议校验
     if (tmode == 1) {
         if (idx + 3 > buffer_size) return 0;
-        buffer[idx++] = (uint8_t)(packet->TargetID >> 8);
-        buffer[idx++] = (uint8_t)(packet->TargetID & 0xFF);
+        buffer[idx++] = (uint8_t)(packet->TargetID >> 8);   // High Byte
+        buffer[idx++] = (uint8_t)(packet->TargetID & 0xFF); // Low Byte
         buffer[idx++] = channel;
     }
+    
+    // --- 协议帧开始 ---
     
     // 2. 协议头 (CM)
     if (idx + 2 > buffer_size) return 0;
@@ -54,11 +53,12 @@ uint16_t LoRa_Manager_Protocol_Pack(const LoRa_Packet_t *packet,
     if (idx + 1 > buffer_size) return 0;
     buffer[idx++] = ctrl;
     
-    // 5. 序号 (Seq)
-    if (idx + 1 > buffer_size) return 0;
-    buffer[idx++] = packet->Sequence;
+    // 5. [变更] 序号 (Seq) - 升级为 16位 (2 Bytes, Little Endian)
+    if (idx + 2 > buffer_size) return 0;
+    buffer[idx++] = (uint8_t)(packet->Sequence & 0xFF);
+    buffer[idx++] = (uint8_t)(packet->Sequence >> 8);
     
-    // 6. 地址域 (TargetID + SourceID)
+    // 6. 地址域 (TargetID + SourceID) - 4 Bytes
     if (idx + 4 > buffer_size) return 0;
     buffer[idx++] = (uint8_t)(packet->TargetID & 0xFF);
     buffer[idx++] = (uint8_t)(packet->TargetID >> 8);
@@ -74,24 +74,17 @@ uint16_t LoRa_Manager_Protocol_Pack(const LoRa_Packet_t *packet,
     
     // 8. CRC16 (可选)
     if (packet->HasCrc) {
-        // [修正2] 删除这里原本报错的 LORA_CHECK(buffer && length > 0...)
-        // 因为 buffer 在函数开头已经检查过了，且这里没有 length 变量
-        
         // 计算范围：从协议头之后(Length)开始，到 Payload 结束
         // 协议帧起始位置：tmode==1 ? 3 : 0
+        // 校验内容：Length(1) + Ctrl(1) + Seq(2) + Addr(4) + Payload(N)
+        
         uint16_t frame_start = (tmode == 1) ? 3 : 0;
-        
-        // 校验内容：Length(1) + Ctrl(1) + Seq(1) + Addr(4) + Payload(N)
-        // 当前 idx 指向 CRC 存放位置
-        // 校验长度 = idx - (frame_start + 2)
-        // +2 是跳过 CM 头
-        
-        uint16_t crc_calc_start = frame_start + 2;
+        uint16_t crc_calc_start = frame_start + 2; // 跳过 CM 头
         uint16_t crc_len = idx - crc_calc_start;
         
         uint16_t crc = LoRa_CRC16_Calculate(&buffer[crc_calc_start], crc_len);
         
-        if (idx + 2 > buffer_size) return 0; // 确保空间足够
+        if (idx + 2 > buffer_size) return 0;
         buffer[idx++] = (uint8_t)(crc & 0xFF);
         buffer[idx++] = (uint8_t)(crc >> 8);
     }
@@ -114,13 +107,12 @@ uint16_t LoRa_Manager_Protocol_Unpack(const uint8_t *buffer,
                                       uint16_t local_id,
                                       uint16_t group_id)
 {
-    // 最小包长：Head(2) + Len(1) + Ctrl(1) + Seq(1) + Addr(4) + Tail(2) = 11字节
-    if (length < 11) return 0;
+    // [变更] 最小包长：Head(2) + Len(1) + Ctrl(1) + Seq(2) + Addr(4) + Tail(2) = 12字节
+    if (length < 12) return 0;
     
     // 1. 寻找包头 (CM)
     if (buffer[0] != LORA_PROTOCOL_HEAD_0 || buffer[1] != LORA_PROTOCOL_HEAD_1) {
-        // 如果第一个字节不是头，返回 1，让调用者丢弃 1 字节后重试
-        return 1; 
+        return 1; // 丢弃 1 字节重试
     }
     
     // 2. 解析基础字段
@@ -128,23 +120,20 @@ uint16_t LoRa_Manager_Protocol_Unpack(const uint8_t *buffer,
     uint8_t ctrl  = buffer[3];
     bool has_crc  = (ctrl & LORA_CTRL_MASK_HAS_CRC);
     
-    // 3. 计算预期总长度
-    // 基础(9) + Payload(p_len) + CRC(2 if has) + Tail(2)
-    // 基础包括：Head(2)+Len(1)+Ctrl(1)+Seq(1)+Addr(4) = 9
-    uint16_t expected_len = 9 + p_len + (has_crc ? 2 : 0) + 2;
+    // 3. [变更] 计算预期总长度
+    // 基础(10) + Payload(p_len) + CRC(2 if has) + Tail(2)
+    // 基础包括：Head(2)+Len(1)+Ctrl(1)+Seq(2)+Addr(4) = 10
+    uint16_t expected_len = 10 + p_len + (has_crc ? 2 : 0) + 2;
     
     // 4. 长度检查
     if (expected_len > length) {
-        // 数据还不够，返回 0 表示继续等待
-        return 0; 
+        return 0; // 数据不够，继续等待
     }
     
     // 5. 包尾检查
     if (buffer[expected_len - 2] != LORA_PROTOCOL_TAIL_0 || 
         buffer[expected_len - 1] != LORA_PROTOCOL_TAIL_1) {
-        // 包尾不对，说明这可能不是一个合法的包，或者长度字段被污染
-        // 丢弃包头，继续寻找
-        return 1;
+        return 1; // 包尾错误，丢弃包头
     }
     
     // 6. CRC 校验
@@ -158,35 +147,41 @@ uint16_t LoRa_Manager_Protocol_Unpack(const uint8_t *buffer,
                             ((uint16_t)buffer[expected_len - 3] << 8);
                             
         if (calc_crc != recv_crc) {
-            // CRC 失败，丢弃整包
-            return expected_len; 
+            return expected_len; // CRC 失败，丢弃整包
         }
     }
     
-    // 7. 地址过滤
-    uint16_t target = (uint16_t)buffer[5] | ((uint16_t)buffer[6] << 8);
+    // 7. [变更] 地址过滤 (偏移量 +1)
+    // TargetID 在 buffer[6], buffer[7]
+    uint16_t target = (uint16_t)buffer[6] | ((uint16_t)buffer[7] << 8);
     
     bool accept = (target == local_id) || 
                   (target == 0xFFFF) || 
                   (group_id != 0 && target == group_id);
                   
     if (!accept) {
-        // 不是发给我的，丢弃整包
-        return expected_len;
+        return expected_len; // 不是发给我的，丢弃
     }
     
-    // 8. 填充输出结构体
+    // 8. [变更] 填充输出结构体 (偏移量 +1)
     if (packet) {
         packet->IsAckPacket = (ctrl & LORA_CTRL_MASK_TYPE);
         packet->NeedAck     = (ctrl & LORA_CTRL_MASK_NEED_ACK);
         packet->HasCrc      = has_crc;
-        packet->Sequence    = buffer[4];
+        
+        // Seq: buffer[4], buffer[5]
+        packet->Sequence    = (uint16_t)buffer[4] | ((uint16_t)buffer[5] << 8);
+        
         packet->TargetID    = target;
-        packet->SourceID    = (uint16_t)buffer[7] | ((uint16_t)buffer[8] << 8);
+        
+        // SourceID: buffer[8], buffer[9]
+        packet->SourceID    = (uint16_t)buffer[8] | ((uint16_t)buffer[9] << 8);
+        
         packet->PayloadLen  = p_len;
         
+        // Payload: buffer[10] 开始
         if (p_len > 0 && p_len <= LORA_MAX_PAYLOAD_LEN) {
-            memcpy(packet->Payload, &buffer[9], p_len);
+            memcpy(packet->Payload, &buffer[10], p_len);
         }
     }
     

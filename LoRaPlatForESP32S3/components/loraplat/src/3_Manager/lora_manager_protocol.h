@@ -47,7 +47,7 @@ typedef struct {
     uint16_t SourceID;       // 源 ID (发送方)
     
     // --- 序号与负载 ---
-    uint8_t  Sequence;       // 包序号
+    uint16_t  Sequence;       // 包序号
     uint8_t  PayloadLen;     // 负载长度
     uint8_t  Payload[LORA_MAX_PAYLOAD_LEN]; // 负载数据
     

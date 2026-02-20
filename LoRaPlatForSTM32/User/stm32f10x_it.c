@@ -24,6 +24,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f10x_it.h"
+#include "lora_port.h" // 引入接口
 
 /** @addtogroup STM32F10x_StdPeriph_Template
   * @{
@@ -55,6 +56,7 @@ void NMI_Handler(void)
   * @retval None
   */
 void HardFault_Handler(void)
+	
 {
   /* Go to infinite loop when Hard Fault exception occurs */
   while (1)
@@ -160,3 +162,31 @@ void SysTick_Handler(void)
 
 
 /******************* (C) COPYRIGHT 2011 STMicroelectronics *****END OF FILE****/
+
+
+// [新增] AUX 引脚中断 (PA5 -> EXTI9_5)
+void EXTI9_5_IRQHandler(void)
+{
+    if (EXTI_GetITStatus(EXTI_Line5) != RESET)
+    {
+        EXTI_ClearITPendingBit(EXTI_Line5);
+        // 通知协议栈：AUX 状态变了（可能发送完了，或者收到数据了）
+        LoRa_Port_NotifyHwEvent();
+    }
+}
+
+// [新增] 串口全局中断 (处理 IDLE)
+void USART3_IRQHandler(void)
+{
+    if (USART_GetITStatus(USART3, USART_IT_IDLE) != RESET)
+    {
+        // 清除 IDLE 标志 (读SR后读DR)
+        volatile uint32_t temp;
+        temp = USART3->SR;
+        temp = USART3->DR;
+        (void)temp;
+        
+        // 通知协议栈：有数据到了，快醒醒
+        LoRa_Port_NotifyHwEvent();
+    }
+}

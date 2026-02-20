@@ -3,9 +3,7 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
-
-#include "esp_random.h" // [新增] 必须包含此头文件才能使用 esp_random()
-
+#include "esp_random.h"
 #include <string.h>
 
 // -----------------------------------------------------------------------------
@@ -22,6 +20,9 @@
 #define UART_TX_BUF_SIZE        1024
 
 static const char *TAG = "LoRa_Port";
+
+// [新增] 硬件事件挂起标志 (模拟中断标志)
+static volatile bool s_HwEventPending = false;
 
 // -----------------------------------------------------------------------------
 // 1. 初始化与配置
@@ -116,6 +117,8 @@ uint16_t LoRa_Port_TransmitData(const uint8_t *data, uint16_t len) {
     int txBytes = uart_write_bytes(LORA_UART_PORT_NUM, (const char*)data, len);
     
     if (txBytes > 0) {
+        // 发送成功也是一种硬件事件（虽然这里是软件缓冲）
+        s_HwEventPending = true;
         return (uint16_t)txBytes;
     }
     return 0;
@@ -139,6 +142,8 @@ uint16_t LoRa_Port_ReceiveData(uint8_t *buf, uint16_t max_len) {
     int rxBytes = uart_read_bytes(LORA_UART_PORT_NUM, buf, available, 0); // timeout=0 (非阻塞)
     
     if (rxBytes > 0) {
+        // 读到了数据，说明刚才发生了硬件事件
+        s_HwEventPending = true;
         return (uint16_t)rxBytes;
     }
     return 0;
@@ -155,4 +160,20 @@ void LoRa_Port_ClearRxBuffer(void) {
 uint32_t LoRa_Port_GetEntropy32(void) {
     // 使用 ESP32 硬件随机数发生器
     return esp_random();
+}
+
+// -----------------------------------------------------------------------------
+// 6. 低功耗支持 (适配实现)
+// -----------------------------------------------------------------------------
+
+void LoRa_Port_NotifyHwEvent(void) {
+    s_HwEventPending = true;
+}
+
+bool LoRa_Port_CheckAndClearHwEvent(void) {
+    // 简单原子操作 (ESP32 是双核，但在单任务轮询架构下，这里主要是防止重入)
+    // 严格来说应该用自旋锁，但 bool 读写通常是原子的，且这里只是标志位
+    bool ret = s_HwEventPending;
+    s_HwEventPending = false;
+    return ret;
 }

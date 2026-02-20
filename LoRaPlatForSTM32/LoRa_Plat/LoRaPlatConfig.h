@@ -213,4 +213,7 @@ typedef struct {
     bool NeedAck;
 } LoRa_SendOpt_t;
 
-#endif // __LORA_PLAT_CONFIG_H
+
+#define LORA_TIMEOUT_INFINITE 0xFFFFFF
+
+#endif  //__LORA_PLAT_CONFIG_H
